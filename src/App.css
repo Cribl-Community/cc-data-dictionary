@@ -619,29 +619,51 @@ body {
 }
 
 .field-fill {
-  position: relative;
-  width: 120px;
+  width: 140px;
   white-space: nowrap;
 }
 
-.fill-bar {
+.field-fill > * {
   display: inline-block;
-  height: 8px;
-  background: #91d5ff;
-  border-radius: 2px;
   vertical-align: middle;
+}
+
+.fill-track {
+  width: 80px;
+  height: 8px;
+  background: #f0f0f0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.fill-bar {
+  display: block;
+  height: 100%;
+  background: #69b1ff;
+  border-radius: 4px;
   min-width: 2px;
 }
 
 .fill-pct {
-  margin-left: 6px;
+  margin-left: 8px;
+  font-variant-numeric: tabular-nums;
   color: #595959;
 }
 
+.field-sample {
+  width: 50%;
+}
+
 .field-sample code {
+  display: block;
   font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  line-height: 1.5;
   color: #fa8c16;
   word-break: break-all;
+  white-space: pre-wrap;
+  max-height: 4.5em;
+  overflow-y: auto;
 }
 
 .internal-field {

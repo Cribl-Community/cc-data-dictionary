@@ -64,6 +64,9 @@ export interface DataPath {
   route: RouteEntry;
   pipeline?: Pipeline;
   dataType: string;
+  // True when this path is inactive — either the route is disabled or its
+  // matched source is disabled.
+  disabled: boolean;
 }
 
 export interface GroupDataDictionary {

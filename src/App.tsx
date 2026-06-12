@@ -227,7 +227,9 @@ function FieldExplorer({ groupId, path }: { groupId: string; path: DataPath }) {
                     <td className="field-name">{f.name}</td>
                     <td className="field-type">{f.types.join(' | ')}</td>
                     <td className="field-fill">
-                      <span className="fill-bar" style={{ width: `${Math.round(f.fillRate * 100)}%` }} />
+                      <div className="fill-track">
+                        <span className="fill-bar" style={{ width: `${Math.round(f.fillRate * 100)}%` }} />
+                      </div>
                       <span className="fill-pct">{Math.round(f.fillRate * 100)}%</span>
                     </td>
                     <td className="field-sample"><code>{f.sample ?? ''}</code></td>
@@ -263,7 +265,7 @@ function DataPathCard({
   const [showExplorer, setShowExplorer] = useState(false);
 
   return (
-    <div className={`data-path-card ${path.source?.disabled ? 'disabled-source' : ''}`}>
+    <div className={`data-path-card ${path.disabled ? 'disabled-source' : ''}`}>
       <div className="data-path-header" onClick={onToggle}>
         <div className="data-path-flow">
           <span className="data-type-label">{displayName}</span>
@@ -279,7 +281,7 @@ function DataPathCard({
             <span className="owner-label">{metadata.owner}</span>
           )}
           <CriticalityBadge level={metadata.criticality} />
-          {path.source?.disabled && <span className="disabled-badge">Disabled</span>}
+          {path.disabled && <span className="disabled-badge">Disabled</span>}
           <span className={`chevron ${expanded ? 'expanded' : ''}`}>&#9654;</span>
         </div>
       </div>
@@ -435,7 +437,7 @@ function App() {
   const selectedGroup = data.find(g => g.group.id === selectedGroupId);
 
   const filteredPaths = selectedGroup?.dataPaths.filter(path => {
-    if (!showDisabled && path.source?.disabled) return false;
+    if (!showDisabled && path.disabled) return false;
 
     if (!searchTerm) return true;
     const term = searchTerm.toLowerCase();

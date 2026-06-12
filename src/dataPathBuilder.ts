@@ -1,21 +1,45 @@
 import type { Source, Destination, RouteEntry, Pipeline, DataPath, GroupDataDictionary, WorkerGroup } from './types';
 import { fetchGroups, fetchSources, fetchDestinations, fetchRoutes, fetchPipelines } from './api';
 
-function getRouteInputConstraint(route: RouteEntry): string | null {
-  if (route.input) return route.input;
+// How a route constrains the source __inputId. `eq` is exact match; the others
+// mirror the JS string methods Cribl filters commonly use.
+type InputOp = 'eq' | 'startsWith' | 'endsWith' | 'includes';
+interface InputConstraint {
+  op: InputOp;
+  value: string;
+}
 
-  if (route.filter) {
-    const match = route.filter.match(/__inputId\s*={2,3}\s*['"]([^'"]+)['"]/);
-    if (match) return match[1];
-  }
+function getRouteInputConstraint(route: RouteEntry): InputConstraint | null {
+  // The `input` field is always an exact match.
+  if (route.input) return { op: 'eq', value: route.input };
+
+  if (!route.filter) return null;
+
+  // Equality: __inputId == 'x' / === 'x'
+  const eq = route.filter.match(/__inputId\s*={2,3}\s*['"]([^'"]+)['"]/);
+  if (eq) return { op: 'eq', value: eq[1] };
+
+  // Method predicates: __inputId.startsWith('x') / .endsWith('x') / .includes('x')
+  const method = route.filter.match(/__inputId\s*\.\s*(startsWith|endsWith|includes)\s*\(\s*['"]([^'"]+)['"]\s*\)/);
+  if (method) return { op: method[1] as InputOp, value: method[2] };
 
   return null;
 }
 
-function sourceMatchesConstraint(source: Source, constraint: string): boolean {
-  if (source.id === constraint) return true;
+function matchesInput(candidate: string, constraint: InputConstraint): boolean {
+  switch (constraint.op) {
+    case 'eq': return candidate === constraint.value;
+    case 'startsWith': return candidate.startsWith(constraint.value);
+    case 'endsWith': return candidate.endsWith(constraint.value);
+    case 'includes': return candidate.includes(constraint.value);
+  }
+}
+
+function sourceMatchesConstraint(source: Source, constraint: InputConstraint): boolean {
+  // __inputId is the full `type:id`, but exact-match routes sometimes use just
+  // the id, so test both forms.
   const fullId = `${source.type}:${source.id}`;
-  return fullId === constraint;
+  return matchesInput(fullId, constraint) || matchesInput(source.id, constraint);
 }
 
 /**
@@ -109,25 +133,41 @@ function buildDataPaths(
   // is content-based (or catch-all) and emits a SINGLE entry, with the filter
   // qualifiers shown in the source slot — no cloning across every source.
   for (const route of routes) {
-    if (route.disabled) continue;
-
     const dest = destMap.get(route.output);
     if (!dest) continue;
+
+    const routeDisabled = !!route.disabled;
 
     const pipeline = route.pipeline ? pipelineMap.get(route.pipeline) : undefined;
     const inputConstraint = getRouteInputConstraint(route);
 
     if (inputConstraint) {
       // Source-specific: emit per matching source.
-      for (const source of sources) {
-        if (!sourceMatchesConstraint(source, inputConstraint)) continue;
+      const matched = sources.filter(s => sourceMatchesConstraint(s, inputConstraint));
+      if (matched.length > 0) {
+        for (const source of matched) {
+          paths.push({
+            source,
+            sourceDisplay: `${source.type}:${source.id}`,
+            destination: dest,
+            route,
+            pipeline,
+            dataType: deriveDataType(route, `${source.type}:${source.id}`),
+            disabled: routeDisabled || !!source.disabled,
+          });
+        }
+      } else {
+        // The route names a source (e.g. __inputId.startsWith('datagen:Zscaler'))
+        // but no current source matches. Rather than "any source", label it with
+        // the constraint value so it still reads as that input family.
+        const label = inputConstraint.value;
         paths.push({
-          source,
-          sourceDisplay: `${source.type}:${source.id}`,
+          sourceDisplay: label,
           destination: dest,
           route,
           pipeline,
-          dataType: deriveDataType(route, `${source.type}:${source.id}`),
+          dataType: deriveDataType(route, label),
+          disabled: routeDisabled,
         });
       }
     } else {
@@ -138,6 +178,7 @@ function buildDataPaths(
         route,
         pipeline,
         dataType: deriveDataType(route, contentRouteSourceDisplay(route)),
+        disabled: routeDisabled,
       });
     }
   }
