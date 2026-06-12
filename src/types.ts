@@ -11,12 +11,23 @@ export interface WorkerGroup {
   description?: string;
 }
 
+// A QuickConnect link: a source wired directly to a destination (and optionally
+// through a pipeline/pack), bypassing the Routes table.
+export interface SourceConnection {
+  output: string;
+  pipeline?: string;
+}
+
 export interface Source {
   id: string;
   type: string;
   conf?: Record<string, unknown>;
   pack?: string;
   disabled?: boolean;
+  // QuickConnect: when sendToRoutes is false, the source uses these direct
+  // connections instead of the Routes table.
+  sendToRoutes?: boolean;
+  connections?: SourceConnection[];
 }
 
 export interface Destination {
@@ -54,18 +65,22 @@ export interface Pipeline {
 }
 
 export interface DataPath {
+  // How the data reaches the destination: through the Routes table, or via a
+  // direct QuickConnect link on the source.
+  kind: 'route' | 'quickconnect';
   // Present only for source-specific routes (those with an __inputId/input
-  // constraint). Content/catch-all routes are not tied to one source.
+  // constraint) and for all QuickConnect paths. Content/catch-all routes are
+  // not tied to one source.
   source?: Source;
   // What to render in the "source" slot of the flow. For source-specific routes
   // this is `type:id`; for content routes it's the filter qualifiers (or "any source").
   sourceDisplay: string;
   destination: Destination;
-  route: RouteEntry;
+  // Absent for QuickConnect paths, which don't go through the Routes table.
+  route?: RouteEntry;
   pipeline?: Pipeline;
   dataType: string;
-  // True when this path is inactive — either the route is disabled or its
-  // matched source is disabled.
+  // True when this path is inactive — the route is disabled or its source is disabled.
   disabled: boolean;
 }
 

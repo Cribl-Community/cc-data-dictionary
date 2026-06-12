@@ -217,6 +217,18 @@ body {
   font-weight: 600;
 }
 
+.quickconnect-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: #f9f0ff;
+  border: 1px solid #d3adf7;
+  border-radius: 3px;
+  color: #722ed1;
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+
 .data-path-header {
   display: flex;
   align-items: center;

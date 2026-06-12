@@ -50,11 +50,19 @@ function sourceMatchesConstraint(source: Source, constraint: InputConstraint): b
  * meaningful constraint to apply.
  */
 export function buildCaptureFilter(path: DataPath): string {
+  // QuickConnect paths don't go through a route; scope the capture to the
+  // source's events by __inputId.
+  if (path.kind === 'quickconnect') {
+    return path.source ? `__inputId=='${path.source.type}:${path.source.id}'` : 'true';
+  }
+
+  const route = path.route;
+  if (!route) return 'true';
+
   const clauses: string[] = [];
 
   // If the route scoped by the `input` field (not present in the filter text),
   // add an __inputId clause so the capture only sees that source's events.
-  const route = path.route;
   const filterHasInputId = route.filter ? /__inputId\s*={2,3}/.test(route.filter) : false;
   if (route.input && !filterHasInputId) {
     clauses.push(`__inputId=='${route.input}'`);
@@ -147,6 +155,7 @@ function buildDataPaths(
       if (matched.length > 0) {
         for (const source of matched) {
           paths.push({
+            kind: 'route',
             source,
             sourceDisplay: `${source.type}:${source.id}`,
             destination: dest,
@@ -162,6 +171,7 @@ function buildDataPaths(
         // the constraint value so it still reads as that input family.
         const label = inputConstraint.value;
         paths.push({
+          kind: 'route',
           sourceDisplay: label,
           destination: dest,
           route,
@@ -173,12 +183,35 @@ function buildDataPaths(
     } else {
       // Content / catch-all: a single entry not tied to any one source.
       paths.push({
+        kind: 'route',
         sourceDisplay: contentRouteSourceDisplay(route),
         destination: dest,
         route,
         pipeline,
         dataType: deriveDataType(route, contentRouteSourceDisplay(route)),
         disabled: routeDisabled,
+      });
+    }
+  }
+
+  // QuickConnect: sources with sendToRoutes === false bypass the Routes table
+  // and connect directly to destinations via their `connections` array.
+  for (const source of sources) {
+    if (source.sendToRoutes !== false || !source.connections?.length) continue;
+
+    for (const conn of source.connections) {
+      const dest = destMap.get(conn.output);
+      if (!dest) continue;
+
+      const pipeline = conn.pipeline ? pipelineMap.get(conn.pipeline) : undefined;
+      paths.push({
+        kind: 'quickconnect',
+        source,
+        sourceDisplay: `${source.type}:${source.id}`,
+        destination: dest,
+        pipeline,
+        dataType: `${source.type}:${source.id}`,
+        disabled: !!source.disabled,
       });
     }
   }

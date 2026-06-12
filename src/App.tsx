@@ -17,11 +17,13 @@ const CAPTURE_LEVELS: { value: number; label: string }[] = [
 // Stable key for a data path. Source-specific routes key on the source id;
 // content/catch-all routes have no source, so key on the displayed source slot.
 function pathKeyOf(path: DataPath): string {
-  return getPathKey(path.source?.id ?? path.sourceDisplay, path.route.id, path.destination.id);
+  // QuickConnect paths have no route; key them on a stable "qc" marker.
+  const routeId = path.route?.id ?? `qc:${path.kind}`;
+  return getPathKey(path.source?.id ?? path.sourceDisplay, routeId, path.destination.id);
 }
 
 type Criticality = 'low' | 'medium' | 'high' | 'critical';
-type GroupBy = 'none' | 'owner' | 'criticality';
+type GroupBy = 'none' | 'owner' | 'criticality' | 'destination';
 
 const CRITICALITY_COLORS: Record<Criticality, string> = {
   low: '#52c41a',
@@ -281,6 +283,7 @@ function DataPathCard({
             <span className="owner-label">{metadata.owner}</span>
           )}
           <CriticalityBadge level={metadata.criticality} />
+          {path.kind === 'quickconnect' && <span className="quickconnect-badge">QuickConnect</span>}
           {path.disabled && <span className="disabled-badge">Disabled</span>}
           <span className={`chevron ${expanded ? 'expanded' : ''}`}>&#9654;</span>
         </div>
@@ -289,7 +292,7 @@ function DataPathCard({
         <div className="data-path-detail">
           <MetadataEditor pathKey={pathKey} metadata={metadata} onSave={onSaveMetadata} />
 
-          {path.route.description && (
+          {path.route?.description && (
             <div className="route-description">
               <span className="detail-label">Route Description:</span>
               <span>{path.route.description}</span>
@@ -303,7 +306,7 @@ function DataPathCard({
             </div>
           )}
 
-          {path.route.filter && path.route.filter !== 'true' && (
+          {path.route?.filter && path.route.filter !== 'true' && (
             <div className="route-filter-detail">
               <span className="detail-label">Route Filter:</span>
               <code>{path.route.filter}</code>
@@ -343,6 +346,8 @@ function groupPaths(
 
     if (groupBy === 'owner') {
       groupKey = meta?.owner || 'Unassigned';
+    } else if (groupBy === 'destination') {
+      groupKey = `${path.destination.type}:${path.destination.id}`;
     } else {
       groupKey = meta?.criticality || '';
     }
@@ -450,8 +455,8 @@ function App() {
       path.source?.type.toLowerCase().includes(term) ||
       path.destination.id.toLowerCase().includes(term) ||
       path.destination.type.toLowerCase().includes(term) ||
-      path.route.name?.toLowerCase().includes(term) ||
-      path.route.description?.toLowerCase().includes(term) ||
+      path.route?.name?.toLowerCase().includes(term) ||
+      path.route?.description?.toLowerCase().includes(term) ||
       path.pipeline?.id.toLowerCase().includes(term) ||
       meta?.owner?.toLowerCase().includes(term) ||
       meta?.dataSourceLabel?.toLowerCase().includes(term) ||
@@ -536,6 +541,12 @@ function App() {
                 onClick={() => setGroupByMode('criticality')}
               >
                 Criticality
+              </button>
+              <button
+                className={`toggle-btn ${groupByMode === 'destination' ? 'active' : ''}`}
+                onClick={() => setGroupByMode('destination')}
+              >
+                Destination
               </button>
             </div>
           </div>
