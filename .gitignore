@@ -11,7 +11,12 @@ node_modules
 dist
 dist-ssr
 build
+package-build
 *.local
+
+# Cribl Git-install pack layout (materialized onto release tags by CI)
+static/
+default/
 
 # Editor directories and files
 .vscode/*
