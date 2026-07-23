@@ -48,14 +48,6 @@ Go to App Platform > Development > Live Preview
 
 ## Release Versions
 
-Version is tracked in [package.json](package.json) (`version`). Bump it before packaging so each release is a distinct artifact. Follow semantic versioning:
-
-- **Patch** (`1.1.0` → `1.1.1`) — bug fixes, no new capabilities.
-- **Minor** (`1.1.0` → `1.2.0`) — new, backward-compatible features.
-- **Major** (`1.1.0` → `2.0.0`) — breaking changes.
-
-To cut a release: update `version` in `package.json`, add a note below, then run `npm run package` to produce `build/CC-data-dictionary-<version>.tgz`.
-
 | Version | Changes |
 | --- | --- |
 | 1.1.0 | Added pack support (sources/destinations/routes inside packs, including pack → worker group routing table stitching) and data dictionary export (CSV, JSON, Markdown). |
