@@ -18,6 +18,8 @@ Understanding what data moves through a Cribl deployment usually means clicking 
 3. **Explore the fields** — for any path, the **Field Explorer** captures live events at a chosen stage (Before Routes, Before Post-Processing Pipeline, or Before Destination) and analyzes them: field names, observed types, fill rate, and a representative sample value. Cribl-internal `__*` fields are flagged.
 4. **Annotate each path** — attach an **owner**, **criticality** (low / medium / high / critical), a data-source label, and free-form notes. Metadata persists in the Cribl KV store, so it's shared across everyone using the app.
 5. **Group and scan** — view paths grouped by owner, criticality, or destination to quickly find unowned or business-critical flows.
+6. **See inside packs** — sources, destinations, and routes defined inside installed packs are surfaced too (badged with the pack name). When a pack hands events back to the worker group routing table, the full flow is stitched together: pack source → pack pipeline → routing table → group pipeline → destination.
+7. **Export** — download the currently visible paths (respecting search and the Active/All filter) as **CSV**, **JSON**, or **Markdown** from the Export menu in the header.
 
 ### How discovery works
 
@@ -27,7 +29,8 @@ Data is loaded lazily per worker group to avoid the platform proxy's 30s request
 
 - [src/App.tsx](src/App.tsx) — top-level flow: select group → view data paths → explore fields → annotate
 - [src/api.ts](src/api.ts) — all Cribl API calls (groups, sources, destinations, routes, pipelines, status, event capture) with a 25s timeout guard
-- [src/dataPathBuilder.ts](src/dataPathBuilder.ts) — resolves routes against source `__inputId` constraints and builds the group data dictionary (including QuickConnect paths)
+- [src/dataPathBuilder.ts](src/dataPathBuilder.ts) — resolves routes against source `__inputId` constraints and builds the group data dictionary (including QuickConnect paths, pack scopes, and pack → routing-table stitching)
+- [src/export.ts](src/export.ts) — serializes the visible data paths to CSV / JSON / Markdown and triggers the browser download
 - [src/fieldAnalysis.ts](src/fieldAnalysis.ts) — summarizes captured events into per-field type / fill-rate / sample stats
 - [src/metadata.ts](src/metadata.ts) — load/save path metadata in the Cribl KV store, keyed by `source::route::destination`
 - [src/types.ts](src/types.ts) — WorkerGroup / Source / Destination / Route / Pipeline / DataPath type definitions
@@ -42,6 +45,20 @@ npm run dev
 
 Log into Cribl Cloud, 
 Go to App Platform > Development > Live Preview
+
+## Release Versions
+
+Version is tracked in [package.json](package.json) (`version`). Bump it before packaging so each release is a distinct artifact. Follow semantic versioning:
+
+- **Patch** (`1.1.0` → `1.1.1`) — bug fixes, no new capabilities.
+- **Minor** (`1.1.0` → `1.2.0`) — new, backward-compatible features.
+- **Major** (`1.1.0` → `2.0.0`) — breaking changes.
+
+To cut a release: update `version` in `package.json`, add a note below, then run `npm run package` to produce `build/CC-data-dictionary-<version>.tgz`.
+
+| Version | Changes |
+| --- | --- |
+| 1.1.0 | Added pack support (sources/destinations/routes inside packs, including pack → worker group routing table stitching) and data dictionary export (CSV, JSON, Markdown). |
 
 ## License
 

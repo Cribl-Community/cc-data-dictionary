@@ -88,6 +88,61 @@ body {
   color: #1890ff;
 }
 
+.export-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.export-btn {
+  padding: 6px 14px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  background: white;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.export-btn:hover:not(:disabled) {
+  border-color: #1890ff;
+  color: #1890ff;
+}
+
+.export-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.export-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  min-width: 120px;
+  background: white;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+
+.export-option {
+  display: block;
+  width: 100%;
+  padding: 8px 14px;
+  border: none;
+  background: white;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  color: #262626;
+}
+
+.export-option:hover {
+  background: #f0f0f0;
+  color: #1890ff;
+}
+
 .search-bar {
   position: relative;
   margin-bottom: 16px;
@@ -241,6 +296,36 @@ body {
   text-transform: uppercase;
   font-weight: 600;
   letter-spacing: 0.3px;
+}
+
+.pack-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: #e6f7ff;
+  border: 1px solid #91d5ff;
+  border-radius: 3px;
+  color: #096dd9;
+  font-weight: 600;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stitch-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: #fff7e6;
+  border: 1px solid #ffd591;
+  border-radius: 3px;
+  color: #d46b08;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.routing-hop {
+  font-style: italic;
+  color: #d46b08;
 }
 
 .data-path-header {

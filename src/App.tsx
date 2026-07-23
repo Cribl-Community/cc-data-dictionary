@@ -3,6 +3,8 @@ import { loadGroups, loadGroupDataDictionary, buildCaptureFilter } from './dataP
 import { loadMetadata, saveMetadata, getPathKey } from './metadata';
 import { captureEvents } from './api';
 import { analyzeFields } from './fieldAnalysis';
+import { downloadExport } from './export';
+import type { ExportFormat } from './export';
 import type { FieldStat } from './fieldAnalysis';
 import type { GroupDataDictionary, DataPath, WorkerGroup, Health, GroupStatus } from './types';
 import type { MetadataStore, DataPathMetadata } from './metadata';
@@ -349,6 +351,13 @@ function DataPathCard({
             {path.sourceDisplay}
             <span className="flow-arrow">→</span>
             {path.pipeline && <>{path.pipeline.id}<span className="flow-arrow">→</span></>}
+            {path.stitch && (
+              <>
+                <span className="routing-hop" title="Handed back to the worker group routing table">{path.stitch.viaLabel}</span>
+                <span className="flow-arrow">→</span>
+                {path.stitch.groupPipeline && <>{path.stitch.groupPipeline.id}<span className="flow-arrow">→</span></>}
+              </>
+            )}
             {path.destination.type}:{path.destination.id}
           </span>
         </div>
@@ -357,6 +366,8 @@ function DataPathCard({
             <span className="owner-label">{metadata.owner}</span>
           )}
           <CriticalityBadge level={metadata.criticality} />
+          {path.pack && <span className="pack-badge" title={`Defined in pack: ${path.pack}`}>📦 {path.pack}</span>}
+          {path.stitch && <span className="stitch-badge" title="Pack routes back through the worker group routing table">↩ via routing table</span>}
           {path.kind === 'quickconnect' && <span className="quickconnect-badge">QuickConnect</span>}
           {path.disabled && <span className="disabled-badge">Disabled</span>}
           {hasStatus && <HealthDot health={pathHealth} title={`Source: ${srcStatus?.health ?? 'n/a'} · Destination: ${destStatus?.health ?? 'n/a'}`} />}
@@ -406,9 +417,24 @@ function DataPathCard({
 
           {path.route?.filter && path.route.filter !== 'true' && (
             <div className="route-filter-detail">
-              <span className="detail-label">Route Filter:</span>
+              <span className="detail-label">{path.stitch ? 'Pack Route Filter:' : 'Route Filter:'}</span>
               <code>{path.route.filter}</code>
             </div>
+          )}
+
+          {path.stitch && (
+            <>
+              <div className="route-description">
+                <span className="detail-label">Group Route:</span>
+                <span>{path.stitch.groupRoute.name} (re-admits pack via routing table)</span>
+              </div>
+              {path.stitch.groupRoute.filter && path.stitch.groupRoute.filter !== 'true' && (
+                <div className="route-filter-detail">
+                  <span className="detail-label">Group Route Filter:</span>
+                  <code>{path.stitch.groupRoute.filter}</code>
+                </div>
+              )}
+            </>
           )}
 
           <div className="field-explorer-section">
@@ -474,6 +500,67 @@ function groupPaths(
   }
 
   return entries;
+}
+
+const EXPORT_FORMATS: { value: ExportFormat; label: string }[] = [
+  { value: 'csv', label: 'CSV' },
+  { value: 'json', label: 'JSON' },
+  { value: 'markdown', label: 'Markdown' },
+];
+
+// Dropdown that exports the currently visible data paths. Disabled when there's
+// nothing to export. Closes on outside click or Escape.
+function ExportMenu({
+  disabled,
+  onExport,
+}: {
+  disabled: boolean;
+  onExport: (format: ExportFormat) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="export-menu" ref={ref}>
+      <button
+        className="export-btn"
+        onClick={() => setOpen(o => !o)}
+        disabled={disabled}
+        title={disabled ? 'No data paths to export' : 'Export the visible data paths'}
+      >
+        Export ▾
+      </button>
+      {open && (
+        <div className="export-dropdown">
+          {EXPORT_FORMATS.map(f => (
+            <button
+              key={f.value}
+              className="export-option"
+              onClick={() => { onExport(f.value); setOpen(false); }}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function App() {
@@ -587,6 +674,8 @@ function App() {
       path.source?.type.toLowerCase().includes(term) ||
       path.destination.id.toLowerCase().includes(term) ||
       path.destination.type.toLowerCase().includes(term) ||
+      path.pack?.toLowerCase().includes(term) ||
+      path.stitch?.groupRoute.name?.toLowerCase().includes(term) ||
       path.route?.name?.toLowerCase().includes(term) ||
       path.route?.description?.toLowerCase().includes(term) ||
       path.pipeline?.id.toLowerCase().includes(term) ||
@@ -597,6 +686,14 @@ function App() {
   }) ?? [];
 
   const grouped = groupPaths(filteredPaths, groupByMode, metadataStore);
+
+  // Export the currently visible paths. Defined here (not memoized) so it closes
+  // over the freshly computed `filteredPaths` each render.
+  function handleExport(format: ExportFormat) {
+    if (!selectedGroup) return;
+    const groupName = selectedGroup.group.name || selectedGroup.group.id;
+    downloadExport(format, filteredPaths, metadataStore, selectedGroup.status, groupName);
+  }
 
   if (loading) {
     return (
@@ -686,6 +783,7 @@ function App() {
             </div>
           </div>
           <button className="refresh-btn" onClick={refresh}>Refresh</button>
+          <ExportMenu disabled={filteredPaths.length === 0} onExport={handleExport} />
           {saveStatus === 'saving' && <span className="save-indicator saving">Saving...</span>}
           {saveStatus === 'saved' && <span className="save-indicator saved">Saved</span>}
           {saveStatus === 'error' && <span className="save-indicator error">Save failed</span>}

@@ -1,4 +1,4 @@
-import type { WorkerGroup, Source, Destination, RoutesConfig, Pipeline, NodeStatus, GroupStatus, Health } from './types';
+import type { WorkerGroup, Source, Destination, RoutesConfig, Pipeline, NodeStatus, GroupStatus, Health, Pack } from './types';
 
 const getApiUrl = () => window.CRIBL_API_URL || 'http://localhost:9000/api/v1';
 
@@ -50,6 +50,37 @@ export async function fetchPipelines(groupId: string): Promise<Pipeline[]> {
   return data.items;
 }
 
+// --- Packs ----------------------------------------------------------------
+// Packs are self-contained bundles with their own inputs/outputs/routes/
+// pipelines. Each accessor mirrors its group-level counterpart but under the
+// `/p/{pack}` prefix, so the dictionary builder can treat a pack like a
+// nested scope.
+
+export async function fetchPacks(groupId: string): Promise<Pack[]> {
+  const data = await apiFetch<{ items: Pack[] }>(`/m/${groupId}/packs`);
+  return data.items ?? [];
+}
+
+export async function fetchPackSources(groupId: string, packId: string): Promise<Source[]> {
+  const data = await apiFetch<{ items: Source[] }>(`/m/${groupId}/p/${packId}/system/inputs`);
+  return data.items ?? [];
+}
+
+export async function fetchPackDestinations(groupId: string, packId: string): Promise<Destination[]> {
+  const data = await apiFetch<{ items: Destination[] }>(`/m/${groupId}/p/${packId}/system/outputs`);
+  return data.items ?? [];
+}
+
+export async function fetchPackRoutes(groupId: string, packId: string): Promise<RoutesConfig> {
+  const data = await apiFetch<{ items: RoutesConfig[] }>(`/m/${groupId}/p/${packId}/routes`);
+  return data.items?.[0] ?? { routes: [] };
+}
+
+export async function fetchPackPipelines(groupId: string, packId: string): Promise<Pipeline[]> {
+  const data = await apiFetch<{ items: Pipeline[] }>(`/m/${groupId}/p/${packId}/pipelines`);
+  return data.items ?? [];
+}
+
 // Raw status item shape from /system/status/{inputs,outputs}.
 interface RawStatusItem {
   id: string;
@@ -72,8 +103,13 @@ function normalizeStatus(item: RawStatusItem): NodeStatus {
   };
 }
 
-async function fetchStatusMap(groupId: string, kind: 'inputs' | 'outputs'): Promise<Record<string, NodeStatus>> {
-  const data = await apiFetch<{ items: RawStatusItem[] }>(`/m/${groupId}/system/status/${kind}`);
+async function fetchStatusMap(
+  groupId: string,
+  kind: 'inputs' | 'outputs',
+  packId?: string,
+): Promise<Record<string, NodeStatus>> {
+  const base = packId ? `/m/${groupId}/p/${packId}` : `/m/${groupId}`;
+  const data = await apiFetch<{ items: RawStatusItem[] }>(`${base}/system/status/${kind}`);
   const map: Record<string, NodeStatus> = {};
   for (const item of data.items ?? []) {
     if (item?.id) map[item.id] = normalizeStatus(item);
@@ -81,13 +117,14 @@ async function fetchStatusMap(groupId: string, kind: 'inputs' | 'outputs'): Prom
   return map;
 }
 
-// Fetch source + destination status for a group. Status is best-effort: if the
-// endpoints fail (older instance, permissions), callers get empty maps rather
-// than a hard error, so the structural dictionary still renders.
-export async function fetchGroupStatus(groupId: string): Promise<GroupStatus> {
+// Fetch source + destination status for a group (or a pack within it, when
+// packId is given). Status is best-effort: if the endpoints fail (older
+// instance, permissions), callers get empty maps rather than a hard error, so
+// the structural dictionary still renders.
+export async function fetchGroupStatus(groupId: string, packId?: string): Promise<GroupStatus> {
   const [inputs, outputs] = await Promise.all([
-    fetchStatusMap(groupId, 'inputs').catch(() => ({})),
-    fetchStatusMap(groupId, 'outputs').catch(() => ({})),
+    fetchStatusMap(groupId, 'inputs', packId).catch(() => ({})),
+    fetchStatusMap(groupId, 'outputs', packId).catch(() => ({})),
   ]);
   return { inputs, outputs };
 }

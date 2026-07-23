@@ -48,6 +48,10 @@ export interface RouteEntry {
   final?: boolean;
   disabled?: boolean;
   description?: string;
+  // 'group' = "Send to Worker Group Routes" (a pack route handing events back to
+  // the worker group routing table); 'pack' = stay within the pack. Absent on
+  // ordinary routes that send to a named output.
+  targetContext?: 'group' | 'pack';
 }
 
 export interface RoutesConfig {
@@ -64,10 +68,23 @@ export interface Pipeline {
   };
 }
 
+// A Cribl pack: a self-contained bundle with its own inputs, outputs, routes,
+// and pipelines, installed into a worker group.
+export interface Pack {
+  id: string;
+  name?: string;
+  description?: string;
+  version?: string;
+  disabled?: boolean;
+}
+
 export interface DataPath {
   // How the data reaches the destination: through the Routes table, or via a
   // direct QuickConnect link on the source.
   kind: 'route' | 'quickconnect';
+  // Id of the pack this path lives inside, or undefined for group-level paths.
+  // Pack paths are built from the pack's own self-contained config.
+  pack?: string;
   // Present only for source-specific routes (those with an __inputId/input
   // constraint) and for all QuickConnect paths. Content/catch-all routes are
   // not tied to one source.
@@ -82,6 +99,16 @@ export interface DataPath {
   dataType: string;
   // True when this path is inactive — the route is disabled or its source is disabled.
   disabled: boolean;
+  // Set when a pack route hands its events back to the worker group routing table
+  // (via the pack's built-in Default output) and a group route re-admits them
+  // (matched by a __packId filter) to a real group destination. `route`/`pipeline`
+  // describe the pack side; `stitch` describes the group-side second hop, and
+  // `destination` is the final group destination.
+  stitch?: {
+    viaLabel: string;
+    groupRoute: RouteEntry;
+    groupPipeline?: Pipeline;
+  };
 }
 
 // Health of a source or destination, from /system/status/*.
