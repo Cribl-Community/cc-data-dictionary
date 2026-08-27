@@ -31,9 +31,19 @@
   },
   "displayName": "Data Dictionary",
   "description": "A repository of information about the data flowing through Cribl",
-  "author": "Kelsey Prior",
+  "author": "Kelsey Prior - kprior@cribl.io",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Cribl-Community/CC-data-dictionary.git"
+  },
   "cribl": {
     "type": "app",
-    "createAppScriptVersion": "0.1.0"
+    "createAppScriptVersion": "0.5.0"
+  },
+  "tags": {
+    "product": [
+      "stream"
+    ]
   }
 }

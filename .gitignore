@@ -10,13 +10,21 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
-build
-package-build
 *.local
 
-# Cribl Git-install pack layout (materialized onto release tags by CI)
-static/
-default/
+# Pack build artifacts
+build
+package-build
+
+# Generated pack layout (materialized onto release tags by CI, not committed to main)
+/static
+/default
+
+# Internal scaffold / planning artifacts (not published to the public repo)
+openapi.json
+executions
+APP_BRIEF.md
+APP_DEFINITION.md
 
 # Editor directories and files
 .vscode/*
