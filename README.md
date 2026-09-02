@@ -52,7 +52,7 @@ Go to App Platform > Development > Live Preview
 
 | Version | Changes |
 | --- | --- |
-| 1.1.1 | Install via the Cribl Marketplace (replaces Import from Git); lowercased package name and repository URL. |
+| 1.1.2 | Install via the Cribl Marketplace (replaces Import from Git); lowercased package name and repository URL. |
 | 1.1.0 | Added pack support (sources/destinations/routes inside packs, including pack → worker group routing table stitching) and data dictionary export (CSV, JSON, Markdown). |
 
 ## License
