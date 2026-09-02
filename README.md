@@ -4,10 +4,12 @@ A Cribl Stream app for **mapping and documenting the data flowing through your d
 
 ## Installation
 
-1. Log in to Cribl and then click on **Apps->View All**
-2. Click **Add App->Import from Git**.
-3. Paste the repo url and "latest" for the release tag.
-4. Click **Import**.
+Install directly from the Cribl Marketplace (Organization administrators only):
+
+1. Log in to Cribl and click **Apps** in the top navigation.
+2. Open the **Cribl Marketplace** catalog and find **Data Dictionary**.
+3. Review the app's **Overview**, **Permissions**, and **External API Access**, then click **Install**.
+4. Complete any pre-install checks Cribl prompts you with.
 
 ## What it does
 
@@ -50,6 +52,7 @@ Go to App Platform > Development > Live Preview
 
 | Version | Changes |
 | --- | --- |
+| 1.1.1 | Install via the Cribl Marketplace (replaces Import from Git); lowercased package name and repository URL. |
 | 1.1.0 | Added pack support (sources/destinations/routes inside packs, including pack → worker group routing table stitching) and data dictionary export (CSV, JSON, Markdown). |
 
 ## License
