@@ -83,9 +83,14 @@ body {
   transition: all 0.15s;
 }
 
-.refresh-btn:hover {
+.refresh-btn:hover:not(:disabled) {
   border-color: #1890ff;
   color: #1890ff;
+}
+
+.refresh-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .export-menu {
@@ -141,6 +146,104 @@ body {
 .export-option:hover {
   background: #f0f0f0;
   color: #1890ff;
+}
+
+/* Explains what a data path is and how its title is chosen — the one thing you
+   can't work out by looking at the rows. */
+.intro-panel {
+  margin-bottom: 16px;
+  background: white;
+  border: 1px solid #e8e8e8;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.intro-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.intro-title {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1a1a2e;
+}
+
+.intro-hint {
+  font-size: 12px;
+  color: #1890ff;
+}
+
+.intro-body {
+  padding: 12px 14px 14px;
+  border-top: 1px solid #f0f0f0;
+}
+
+.intro-lede {
+  font-size: 13px;
+  line-height: 1.6;
+  color: #595959;
+  max-width: 90ch;
+  margin-bottom: 14px;
+}
+
+/* Two columns side by side where there's room, stacked when there isn't. */
+.intro-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+}
+
+.intro-column h3 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #8c8c8c;
+  margin-bottom: 8px;
+}
+
+.intro-note {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #8c8c8c;
+  margin-bottom: 8px;
+}
+
+.intro-list {
+  margin: 0 0 8px;
+  padding-left: 20px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #595959;
+}
+
+.intro-list li {
+  margin-bottom: 2px;
+}
+
+.intro-list strong {
+  color: #262626;
+}
+
+.intro-list code,
+.intro-note code {
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+  padding: 1px 4px;
+  background: #f5f7fa;
+  border: 1px solid #e8e8e8;
+  border-radius: 3px;
+  color: #595959;
 }
 
 .search-bar {
@@ -209,6 +312,72 @@ body {
   border-top-color: #1890ff;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
+}
+
+.spinner.small {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+
+/* Groups are still arriving, but the ones already loaded stay on screen — this
+   sits above them rather than replacing the list with a full-page spinner. */
+.load-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 8px 14px;
+  background: #f0f5ff;
+  border: 1px solid #adc6ff;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #1d39c4;
+}
+
+/* Worker groups that failed to load, listed alongside the ones that worked. */
+.load-failures {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: #fff2f0;
+  border: 1px solid #ffccc7;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #a8071a;
+}
+
+.load-failures-text strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.load-failures ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.load-failure-group {
+  font-weight: 600;
+}
+
+.load-failures button {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  background: white;
+  border: 1px solid #ffccc7;
+  border-radius: 4px;
+  color: #a8071a;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.load-failures button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 @keyframes spin {
@@ -298,6 +467,23 @@ body {
   letter-spacing: 0.3px;
 }
 
+/* Which worker group a path belongs to. Shown only in the all-groups scope when
+   the list isn't already sectioned by group. Deliberately quieter than the pack
+   and stitch badges, which describe how the path is built rather than where. */
+.group-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: #fafafa;
+  border: 1px solid #d9d9d9;
+  border-radius: 3px;
+  color: #595959;
+  font-weight: 600;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pack-badge {
   font-size: 10px;
   padding: 2px 6px;
@@ -328,6 +514,9 @@ body {
   color: #d46b08;
 }
 
+/* nowrap, not wrap: the badges, health dot and chevron must stay on the right no
+   matter how long the label is. A route filter used as a label can run the full
+   width of the card, and wrapping dropped them onto their own line below it. */
 .data-path-header {
   display: flex;
   align-items: center;
@@ -335,7 +524,14 @@ body {
   padding: 12px 16px;
   cursor: pointer;
   gap: 12px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+
+/* Expanded, a long label can run to several lines; keep the chevron — the
+   affordance that collapses it again — up at the top rather than centred
+   halfway down the block. Collapsed rows stay vertically centred as designed. */
+.data-path-header.expanded {
+  align-items: flex-start;
 }
 
 .data-path-flow {
@@ -343,16 +539,39 @@ body {
   align-items: baseline;
   gap: 10px;
   flex-wrap: wrap;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
+/* One line, truncated — expand the card to read a long one in full (and the
+   route filter itself is shown in the detail below).
+   `min-width: 0` is what makes the ellipsis possible: a flex item defaults to
+   `min-width: auto`, i.e. its min-content width, which for nowrap text is the
+   entire string — so it could neither shrink nor clip, and instead forced the
+   header wide. Flex lines are collected using hypothetical (unshrunk) sizes, so
+   a long label still gets its own line rather than squeezing the grey detail. */
 .data-type-label {
   font-size: 14px;
   font-weight: 600;
   color: #1a1a2e;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  min-width: 0;
 }
 
+/* Expanded: show the whole label, breaking mid-token if it has no spaces (a
+   filter expression usually doesn't). The header stays nowrap, so the meta block
+   stays put on the right. */
+.data-path-header.expanded .data-type-label {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+/* The grey flow line may wrap freely, including inside long ids. */
 .flow-detail {
   font-size: 12px;
   color: #8c8c8c;
@@ -360,6 +579,8 @@ body {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .flow-arrow {
@@ -368,11 +589,14 @@ body {
   font-weight: 600;
 }
 
+/* Never shrinks and never wraps, so the pack/group badges, health dot and
+   chevron keep their place on the right. */
 .data-path-meta {
   display: flex;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  flex-wrap: nowrap;
 }
 
 
@@ -534,12 +758,18 @@ body {
   border-radius: 3px;
 }
 
+/* Capped like the pack and group badges: the meta block doesn't shrink, so an
+   unbounded owner name here would eat the label's room instead of its own. */
 .owner-label {
   font-size: 11px;
   color: #595959;
   padding: 2px 8px;
   background: #f0f0f0;
   border-radius: 3px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .route-filter-detail {
@@ -874,4 +1104,15 @@ body {
   border: 1px solid #ffe58f;
   border-radius: 3px;
   color: #874d00;
+}
+
+/* Which worker group the gap is in — only rendered when several are on screen,
+   since that's the one thing you need to know to go fix it. */
+.coverage-chip-group {
+  margin-right: 6px;
+  padding-right: 6px;
+  border-right: 1px solid #ffe58f;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-weight: 600;
+  color: #ad6800;
 }

@@ -1,13 +1,19 @@
 import type { DataPath, GroupStatus, Health } from './types';
 import type { MetadataStore, DataPathMetadata } from './metadata';
-import { getPathKey } from './metadata';
+import { metaFor } from './metadata';
 
 export type ExportFormat = 'csv' | 'json' | 'markdown';
+
+// Status for every group in the export, keyed by group id. Source/destination ids
+// are only unique within a group, so health must be resolved against the path's
+// OWN group — one merged map would mis-attribute health across groups.
+export type StatusByGroup = Record<string, GroupStatus>;
 
 // One flattened data-path row: everything the UI shows for a path plus its
 // user-authored metadata and resolved health. Shared by the CSV and Markdown
 // renderers so their columns never drift apart.
 interface ExportRow {
+  workerGroup: string;
   dataSourceLabel: string;
   dataType: string;
   pack: string;
@@ -30,12 +36,6 @@ interface ExportRow {
   destinationHealth: string;
 }
 
-// Mirrors App.tsx's pathKeyOf so exported metadata matches what the UI edits.
-function pathKeyOf(path: DataPath): string {
-  const routeId = path.route?.id ?? `qc:${path.kind}`;
-  return getPathKey(path.source?.id ?? path.sourceDisplay, routeId, path.destination.id);
-}
-
 function healthOf(id: string | undefined, map: Record<string, { health: Health }>): string {
   if (!id) return '';
   return map[id]?.health ?? '';
@@ -43,6 +43,7 @@ function healthOf(id: string | undefined, map: Record<string, { health: Health }
 
 function toRow(path: DataPath, meta: DataPathMetadata, status?: GroupStatus): ExportRow {
   return {
+    workerGroup: path.groupName,
     dataSourceLabel: meta.dataSourceLabel || path.dataType,
     dataType: path.dataType,
     pack: path.pack ?? '',
@@ -68,6 +69,7 @@ function toRow(path: DataPath, meta: DataPathMetadata, status?: GroupStatus): Ex
 
 // Ordered [key -> header] so a single list drives column order + labels.
 const COLUMNS: [keyof ExportRow, string][] = [
+  ['workerGroup', 'Worker Group'],
   ['dataSourceLabel', 'Data Source Label'],
   ['dataType', 'Data Type'],
   ['pack', 'Pack'],
@@ -110,22 +112,24 @@ function mdCell(value: string): string {
   return value.replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 }
 
-function toMarkdown(rows: ExportRow[], groupName: string): string {
+function toMarkdown(rows: ExportRow[], scopeName: string): string {
   const header = `| ${COLUMNS.map(([, label]) => label).join(' | ')} |`;
   const divider = `| ${COLUMNS.map(() => '---').join(' | ')} |`;
   const body = rows.map(
     row => `| ${COLUMNS.map(([key]) => mdCell(row[key])).join(' | ')} |`,
   );
-  return [`# Data Dictionary — ${groupName}`, '', header, divider, ...body, ''].join('\n');
+  return [`# Data Dictionary — ${scopeName}`, '', header, divider, ...body, ''].join('\n');
 }
 
 // Full-fidelity structured export: keeps nested route/pipeline/metadata/health
 // rather than flattening, so it round-trips for backup or re-import.
-function toJson(paths: DataPath[], metadataStore: MetadataStore, status: GroupStatus | undefined, groupName: string): string {
+function toJson(paths: DataPath[], metadataStore: MetadataStore, statusByGroup: StatusByGroup, scopeName: string): string {
   const payload = {
-    group: groupName,
+    scope: scopeName,
     exportedPathCount: paths.length,
     paths: paths.map(path => ({
+      workerGroup: path.groupName,
+      workerGroupId: path.groupId,
       dataType: path.dataType,
       pack: path.pack ?? null,
       connection: path.kind,
@@ -138,10 +142,10 @@ function toJson(paths: DataPath[], metadataStore: MetadataStore, status: GroupSt
         ? { via: path.stitch.viaLabel, groupRoute: path.stitch.groupRoute, groupPipeline: path.stitch.groupPipeline ?? null }
         : null,
       disabled: path.disabled,
-      metadata: metadataStore[pathKeyOf(path)] ?? {},
+      metadata: metaFor(metadataStore, path),
       health: {
-        source: healthOf(path.source?.id, status?.inputs ?? {}) || null,
-        destination: healthOf(path.destination.id, status?.outputs ?? {}) || null,
+        source: healthOf(path.source?.id, statusByGroup[path.groupId]?.inputs ?? {}) || null,
+        destination: healthOf(path.destination.id, statusByGroup[path.groupId]?.outputs ?? {}) || null,
       },
     })),
   };
@@ -158,15 +162,17 @@ export function buildExport(
   format: ExportFormat,
   paths: DataPath[],
   metadataStore: MetadataStore,
-  status: GroupStatus | undefined,
-  groupName: string,
+  statusByGroup: StatusByGroup,
+  scopeName: string,
 ): string {
-  if (format === 'json') return toJson(paths, metadataStore, status, groupName);
-  const rows = paths.map(path => toRow(path, metadataStore[pathKeyOf(path)] ?? {}, status));
-  return format === 'csv' ? toCsv(rows) : toMarkdown(rows, groupName);
+  if (format === 'json') return toJson(paths, metadataStore, statusByGroup, scopeName);
+  const rows = paths.map(path =>
+    toRow(path, metaFor(metadataStore, path), statusByGroup[path.groupId]),
+  );
+  return format === 'csv' ? toCsv(rows) : toMarkdown(rows, scopeName);
 }
 
-// Turn a group name into a filesystem-friendly slug for the download filename.
+// Turn a scope name into a filesystem-friendly slug for the download filename.
 function slug(name: string): string {
   return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'group';
 }
@@ -177,16 +183,16 @@ export function downloadExport(
   format: ExportFormat,
   paths: DataPath[],
   metadataStore: MetadataStore,
-  status: GroupStatus | undefined,
-  groupName: string,
+  statusByGroup: StatusByGroup,
+  scopeName: string,
 ): void {
   const { ext, mime } = FORMAT_META[format];
-  const content = buildExport(format, paths, metadataStore, status, groupName);
+  const content = buildExport(format, paths, metadataStore, statusByGroup, scopeName);
   const blob = new Blob([content], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `data-dictionary-${slug(groupName)}.${ext}`;
+  a.download = `data-dictionary-${slug(scopeName)}.${ext}`;
   document.body.appendChild(a);
   a.click();
   a.remove();

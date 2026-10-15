@@ -79,6 +79,11 @@ export interface Pack {
 }
 
 export interface DataPath {
+  // Worker group this path lives in. Every path carries it so status lookups,
+  // captures, grouping and export behave identically whether the UI is scoped to
+  // one group or to all of them (entity ids are only unique WITHIN a group).
+  groupId: string;
+  groupName: string;
   // How the data reaches the destination: through the Routes table, or via a
   // direct QuickConnect link on the source.
   kind: 'route' | 'quickconnect';
@@ -110,6 +115,11 @@ export interface DataPath {
     groupPipeline?: Pipeline;
   };
 }
+
+// A data path before its worker group is attached. The builders work within one
+// scope at a time and don't know (or need) the group, so they emit these and
+// loadGroupDataDictionary tags them once at the end.
+export type UntaggedDataPath = Omit<DataPath, 'groupId' | 'groupName'>;
 
 // Health of a source or destination, from /system/status/*.
 export type Health = 'Green' | 'Yellow' | 'Red' | 'Unknown';

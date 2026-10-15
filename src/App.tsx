@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { loadGroups, loadGroupDataDictionary, buildCaptureFilter } from './dataPathBuilder';
-import { loadMetadata, saveMetadata, getPathKey } from './metadata';
+import { loadMetadata, saveMetadata, applyMetadataEdit, pathKeyOf, metaFor } from './metadata';
+import { mapWithConcurrency } from './concurrency';
 import { captureEvents } from './api';
 import { analyzeFields } from './fieldAnalysis';
 import { downloadExport } from './export';
-import type { ExportFormat } from './export';
+import type { ExportFormat, StatusByGroup } from './export';
 import type { FieldStat } from './fieldAnalysis';
 import type { GroupDataDictionary, DataPath, WorkerGroup, Health, GroupStatus } from './types';
 import type { MetadataStore, DataPathMetadata } from './metadata';
@@ -16,16 +17,17 @@ const CAPTURE_LEVELS: { value: number; label: string }[] = [
   { value: 3, label: 'Before Destination' },
 ];
 
-// Stable key for a data path. Source-specific routes key on the source id;
-// content/catch-all routes have no source, so key on the displayed source slot.
-function pathKeyOf(path: DataPath): string {
-  // QuickConnect paths have no route; key them on a stable "qc" marker.
-  const routeId = path.route?.id ?? `qc:${path.kind}`;
-  return getPathKey(path.source?.id ?? path.sourceDisplay, routeId, path.destination.id);
-}
+// Sentinel for the worker-group selector's "All worker groups" option. Never sent
+// to the API — the loader expands it to the real group ids.
+const ALL_GROUPS = '__all__';
+
+// How many worker groups to load at once. Each group costs six API calls plus
+// five per installed pack; a wider burst makes the Leader report that the config
+// helper cannot be booted because it is under load.
+const GROUP_FETCH_CONCURRENCY = 3;
 
 type Criticality = 'low' | 'medium' | 'high' | 'critical';
-type GroupBy = 'none' | 'owner' | 'criticality' | 'destination';
+type GroupBy = 'none' | 'workerGroup' | 'owner' | 'criticality' | 'destination';
 
 const CRITICALITY_COLORS: Record<Criticality, string> = {
   low: '#52c41a',
@@ -52,13 +54,11 @@ function CriticalityBadge({ level }: { level?: Criticality }) {
 }
 
 function MetadataEditor({
-  pathKey,
   metadata,
   onSave,
 }: {
-  pathKey: string;
   metadata: DataPathMetadata;
-  onSave: (key: string, meta: DataPathMetadata) => void;
+  onSave: (meta: DataPathMetadata) => void;
 }) {
   const [owner, setOwner] = useState(metadata.owner || '');
   const [criticality, setCriticality] = useState<Criticality | ''>(metadata.criticality || '');
@@ -67,7 +67,7 @@ function MetadataEditor({
   const [dirty, setDirty] = useState(false);
 
   function handleSave() {
-    onSave(pathKey, {
+    onSave({
       owner: owner || undefined,
       criticality: (criticality as Criticality) || undefined,
       notes: notes || undefined,
@@ -274,39 +274,71 @@ function worstHealth(a?: Health, b?: Health): Health {
   return candidates.reduce((w, h) => (rank[h] > rank[w] ? h : w));
 }
 
-function CoverageBanner({ dict }: { dict: GroupDataDictionary }) {
+// One coverage gap, carrying the group it was found in so the banner can
+// aggregate across every visible group without losing attribution.
+interface CoverageChip {
+  key: string;
+  label: string;
+  groupName: string;
+}
+
+// Flatten each visible group's coverage into labelled chips. Coverage is computed
+// per group (a source is only orphaned relative to its own group's routes), so
+// the aggregate is a concatenation, not a recomputation.
+function collectCoverage(dicts: GroupDataDictionary[]): { orphans: CoverageChip[]; unused: CoverageChip[] } {
+  const orphans: CoverageChip[] = [];
+  const unused: CoverageChip[] = [];
+  for (const dict of dicts) {
+    const groupName = dict.group.name || dict.group.id;
+    for (const s of dict.coverage.orphanedSources) {
+      orphans.push({ key: `${dict.group.id}::${s.id}`, label: `${s.type}:${s.id}`, groupName });
+    }
+    for (const d of dict.coverage.unusedDestinations) {
+      unused.push({ key: `${dict.group.id}::${d.id}`, label: `${d.type}:${d.id}`, groupName });
+    }
+  }
+  return { orphans, unused };
+}
+
+function CoverageBanner({ dicts }: { dicts: GroupDataDictionary[] }) {
   const [open, setOpen] = useState(false);
-  const { orphanedSources, unusedDestinations } = dict.coverage;
-  const total = orphanedSources.length + unusedDestinations.length;
+  const { orphans, unused } = collectCoverage(dicts);
+  const total = orphans.length + unused.length;
   if (total === 0) return null;
+
+  // With one group on screen the group name is redundant; across groups it's the
+  // only way to know where to go fix the gap.
+  const showGroup = dicts.length > 1;
+  const chip = (c: CoverageChip) => (
+    <span key={c.key} className="coverage-chip">
+      {showGroup && <span className="coverage-chip-group">{c.groupName}</span>}
+      {c.label}
+    </span>
+  );
 
   return (
     <div className="coverage-banner">
       <div className="coverage-summary" onClick={() => setOpen(o => !o)}>
         <span className="coverage-icon">⚠️</span>
         <span className="coverage-text">
-          {orphanedSources.length > 0 && `${orphanedSources.length} orphaned source${orphanedSources.length > 1 ? 's' : ''}`}
-          {orphanedSources.length > 0 && unusedDestinations.length > 0 && ' · '}
-          {unusedDestinations.length > 0 && `${unusedDestinations.length} unused destination${unusedDestinations.length > 1 ? 's' : ''}`}
+          {orphans.length > 0 && `${orphans.length} orphaned source${orphans.length > 1 ? 's' : ''}`}
+          {orphans.length > 0 && unused.length > 0 && ' · '}
+          {unused.length > 0 && `${unused.length} unused destination${unused.length > 1 ? 's' : ''}`}
         </span>
         <span className={`chevron ${open ? 'expanded' : ''}`}>&#9654;</span>
       </div>
       {open && (
         <div className="coverage-detail">
-          {orphanedSources.length > 0 && (
+          {orphans.length > 0 && (
             <div className="coverage-group">
               <span className="detail-label">Sources with no outgoing path:</span>
-              <div className="coverage-chips">
-                {orphanedSources.map(s => <span key={s.id} className="coverage-chip">{s.type}:{s.id}</span>)}
-              </div>
+              <div className="coverage-chips">{orphans.map(chip)}</div>
             </div>
           )}
-          {unusedDestinations.length > 0 && (
+          {unused.length > 0 && (
             <div className="coverage-group">
               <span className="detail-label">Destinations nothing routes to:</span>
-              <div className="coverage-chips">
-                {unusedDestinations.map(d => <span key={d.id} className="coverage-chip">{d.type}:{d.id}</span>)}
-              </div>
+              <div className="coverage-chips">{unused.map(chip)}</div>
             </div>
           )}
         </div>
@@ -320,8 +352,7 @@ function DataPathCard({
   expanded,
   onToggle,
   metadata,
-  pathKey,
-  groupId,
+  showGroup,
   status,
   onSaveMetadata,
 }: {
@@ -329,10 +360,13 @@ function DataPathCard({
   expanded: boolean;
   onToggle: () => void;
   metadata: DataPathMetadata;
-  pathKey: string;
-  groupId: string;
+  // Badge the card with its worker group — on when the list mixes groups and
+  // isn't already sectioned by them.
+  showGroup: boolean;
+  // Status for this path's OWN group. Entity ids are only unique within a group,
+  // so a merged map would mis-attribute health across groups.
   status?: GroupStatus;
-  onSaveMetadata: (key: string, meta: DataPathMetadata) => void;
+  onSaveMetadata: (path: DataPath, meta: DataPathMetadata) => void;
 }) {
   const displayName = metadata.dataSourceLabel || path.dataType;
   const [showExplorer, setShowExplorer] = useState(false);
@@ -344,9 +378,13 @@ function DataPathCard({
 
   return (
     <div className={`data-path-card ${path.disabled ? 'disabled-source' : ''}`}>
-      <div className="data-path-header" onClick={onToggle}>
+      <div className={`data-path-header ${expanded ? 'expanded' : ''}`} onClick={onToggle}>
         <div className="data-path-flow">
-          <span className="data-type-label">{displayName}</span>
+          {/* Truncated to one line when collapsed, so the tooltip is the way to
+              read a long label (a route filter) without expanding the card. */}
+          <span className="data-type-label" title={expanded ? undefined : displayName}>
+            {displayName}
+          </span>
           <span className="flow-detail">
             {path.sourceDisplay}
             <span className="flow-arrow">→</span>
@@ -366,6 +404,7 @@ function DataPathCard({
             <span className="owner-label">{metadata.owner}</span>
           )}
           <CriticalityBadge level={metadata.criticality} />
+          {showGroup && <span className="group-badge" title={`Worker group: ${path.groupName}`}>{path.groupName}</span>}
           {path.pack && <span className="pack-badge" title={`Defined in pack: ${path.pack}`}>📦 {path.pack}</span>}
           {path.stitch && <span className="stitch-badge" title="Pack routes back through the worker group routing table">↩ via routing table</span>}
           {path.kind === 'quickconnect' && <span className="quickconnect-badge">QuickConnect</span>}
@@ -399,7 +438,7 @@ function DataPathCard({
             </div>
           )}
 
-          <MetadataEditor pathKey={pathKey} metadata={metadata} onSave={onSaveMetadata} />
+          <MetadataEditor metadata={metadata} onSave={meta => onSaveMetadata(path, meta)} />
 
           {path.route?.description && (
             <div className="route-description">
@@ -443,7 +482,9 @@ function DataPathCard({
                 🔍 Field Explorer
               </button>
             ) : (
-              <FieldExplorer groupId={groupId} path={path} />
+              /* Captures must hit the path's own worker group, not whichever one
+                 happens to be first in an all-groups list. */
+              <FieldExplorer groupId={path.groupId} path={path} />
             )}
           </div>
         </div>
@@ -464,16 +505,17 @@ function groupPaths(
   const groups = new Map<string, DataPath[]>();
 
   for (const path of paths) {
-    const key = pathKeyOf(path);
-    const meta = metadataStore[key];
+    const meta = metaFor(metadataStore, path);
     let groupKey: string;
 
-    if (groupBy === 'owner') {
-      groupKey = meta?.owner || 'Unassigned';
+    if (groupBy === 'workerGroup') {
+      groupKey = path.groupName;
+    } else if (groupBy === 'owner') {
+      groupKey = meta.owner || 'Unassigned';
     } else if (groupBy === 'destination') {
       groupKey = `${path.destination.type}:${path.destination.id}`;
     } else {
-      groupKey = meta?.criticality || '';
+      groupKey = meta.criticality || '';
     }
 
     if (!groups.has(groupKey)) groups.set(groupKey, []);
@@ -500,6 +542,138 @@ function groupPaths(
   }
 
   return entries;
+}
+
+const INTRO_COLLAPSED_KEY = 'data-dictionary:intro-collapsed';
+
+// The app runs in a sandboxed iframe, where touching localStorage can throw
+// outright rather than just return null, depending on the embedder's storage
+// policy. A remembered panel state is a nicety, so failure means "expanded".
+function readIntroCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(INTRO_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeIntroCollapsed(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(INTRO_COLLAPSED_KEY, collapsed ? '1' : '0');
+  } catch {
+    // Nothing to do — the panel just reopens next time.
+  }
+}
+
+/**
+ * What this page is and how to read it. Expanded by default, because the naming
+ * precedence isn't guessable from looking at the rows — but collapsible, and the
+ * choice is remembered, so it doesn't nag people who already know.
+ */
+function IntroPanel() {
+  const [collapsed, setCollapsed] = useState(readIntroCollapsed);
+
+  function toggle() {
+    const next = !collapsed;
+    setCollapsed(next);
+    writeIntroCollapsed(next);
+  }
+
+  return (
+    <section className="intro-panel">
+      <button className="intro-toggle" onClick={toggle} aria-expanded={!collapsed}>
+        <span className={`chevron ${collapsed ? '' : 'expanded'}`}>&#9654;</span>
+        <span className="intro-title">How the data dictionary works</span>
+        <span className="intro-hint">{collapsed ? 'Show' : 'Hide'}</span>
+      </button>
+
+      {!collapsed && (
+        <div className="intro-body">
+          <p className="intro-lede">
+            Each row is one <strong>data path</strong> — a single journey your events take
+            through this deployment, from a source, through the Routes table (or a
+            QuickConnect link), optionally via a pipeline, to a destination. One source
+            usually appears in several paths, because different slices of its data are
+            routed to different places.
+          </p>
+
+          <div className="intro-columns">
+            <div className="intro-column">
+              <h3>How each path gets its name</h3>
+              <p className="intro-note">
+                The bold title is the best available description of the data on that path.
+                The first of these that exists wins:
+              </p>
+              <ol className="intro-list">
+                <li>
+                  <strong>Your Data Source Label</strong> — anything you type in the card
+                  below always wins.
+                </li>
+                <li>
+                  The <strong>route's description</strong>, as written in Cribl.
+                </li>
+                <li>
+                  Any <strong><code>index</code> / <code>sourcetype</code></strong> values
+                  found in the route filter.
+                </li>
+                <li>
+                  The <strong>route filter</strong> itself, with the{' '}
+                  <code>__inputId</code> part removed — that names the source, which the
+                  grey line already shows.
+                </li>
+                <li>
+                  The <strong>route name</strong>, for routes that aren't tied to one
+                  source.
+                </li>
+                <li>
+                  The <strong>source</strong> (<code>type:id</code>), or{' '}
+                  <code>any source</code> for a filter-only route that any source's events
+                  can match.
+                </li>
+              </ol>
+              <p className="intro-note">
+                So a title that reads as a raw filter expression means the route has no
+                description in Cribl. Either add one there, or give the path a Data Source
+                Label here.
+              </p>
+            </div>
+
+            <div className="intro-column">
+              <h3>Working with it</h3>
+              <ul className="intro-list">
+                <li>
+                  <strong>Pick a worker group</strong>, or <strong>All worker groups</strong>{' '}
+                  to audit the whole deployment at once. Groups appear as they load.
+                </li>
+                <li>
+                  <strong>Click any path</strong> to annotate it with an owner, criticality,
+                  and notes. These are saved centrally, so your whole team sees them.
+                </li>
+                <li>
+                  <strong>Field Explorer</strong> (inside an expanded path) samples live
+                  events at the stage you choose and reports the fields actually present,
+                  with fill rates — the fastest way to answer "what's really in this feed?"
+                </li>
+                <li>
+                  <strong>Group by Owner or Criticality</strong> to find unowned or
+                  business-critical flows. In the all-groups scope these roll up across
+                  worker groups.
+                </li>
+                <li>
+                  A <strong>warning banner</strong> flags sources nothing routes out of and
+                  destinations nothing routes to.
+                </li>
+                <li>
+                  <strong>Export</strong> hands you whatever is currently on screen —
+                  search and the Active/All filter included — as CSV, JSON, or Markdown.
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
 }
 
 const EXPORT_FORMATS: { value: ExportFormat; label: string }[] = [
@@ -563,19 +737,87 @@ function ExportMenu({
   );
 }
 
+// A worker group whose dictionary failed to load. Tracked per group so one
+// unreadable fleet doesn't blank out the groups that loaded fine.
+interface GroupFailure {
+  id: string;
+  name: string;
+  message: string;
+}
+
 function App() {
   const [groups, setGroups] = useState<WorkerGroup[]>([]);
-  // Per-group dictionaries, loaded lazily on selection and cached.
+  // Per-group dictionaries, loaded lazily on selection and cached. The
+  // all-worker-groups scope reads straight out of this same cache, so each group
+  // is still fetched once and renders as soon as it lands.
   const [dictCache, setDictCache] = useState<Record<string, GroupDataDictionary>>({});
   const [metadataStore, setMetadataStore] = useState<MetadataStore>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  // Either a worker group id or the ALL_GROUPS sentinel.
+  const [scope, setScope] = useState<string | null>(null);
+  const [loadingGroupIds, setLoadingGroupIds] = useState<Set<string>>(new Set());
+  const [failedGroups, setFailedGroups] = useState<GroupFailure[]>([]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [showDisabled, setShowDisabled] = useState(false);
   const [groupByMode, setGroupByMode] = useState<GroupBy>('none');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+
+  // Tracks groups already loaded so we dedupe fetches across re-selections.
+  const loadedRef = useRef<Set<string>>(new Set());
+
+  /**
+   * Fetch the given groups' dictionaries, at most GROUP_FETCH_CONCURRENCY at a
+   * time, writing each into the cache as it arrives so the list fills in
+   * progressively rather than waiting on the slowest group. Takes the group
+   * objects directly, so there's no stale closure over `groups`.
+   *
+   * Failures are per group: a group that errors lands in `failedGroups` and is
+   * dropped from loadedRef so it can be retried, while the rest still render.
+   */
+  const loadGroupsData = useCallback(async (requested: WorkerGroup[], force = false) => {
+    const targets = force ? requested : requested.filter(g => !loadedRef.current.has(g.id));
+    if (targets.length === 0) return;
+
+    for (const group of targets) loadedRef.current.add(group.id);
+    setLoadingGroupIds(prev => {
+      const next = new Set(prev);
+      for (const group of targets) next.add(group.id);
+      return next;
+    });
+    setFailedGroups(prev => prev.filter(f => !targets.some(t => t.id === f.id)));
+
+    await mapWithConcurrency(targets, GROUP_FETCH_CONCURRENCY, async group => {
+      try {
+        const dict = await loadGroupDataDictionary(group);
+        setDictCache(prev => ({ ...prev, [group.id]: dict }));
+      } catch (e) {
+        loadedRef.current.delete(group.id); // allow retry
+        setFailedGroups(prev => [
+          ...prev.filter(f => f.id !== group.id),
+          {
+            id: group.id,
+            name: group.name || group.id,
+            message: e instanceof Error ? e.message : 'Failed to load',
+          },
+        ]);
+      } finally {
+        setLoadingGroupIds(prev => {
+          const next = new Set(prev);
+          next.delete(group.id);
+          return next;
+        });
+      }
+    });
+  }, []);
+
+  // The groups a scope covers: every group for ALL_GROUPS, otherwise just the one.
+  const groupsInScope = useCallback(
+    (which: string, all: WorkerGroup[]) =>
+      which === ALL_GROUPS ? all : all.filter(g => g.id === which),
+    [],
+  );
 
   // Load the lightweight group list + metadata, then auto-select the first group.
   // Runs once on mount; `loading` already starts true, so no synchronous
@@ -586,7 +828,8 @@ function App() {
       setGroups(groupList);
       setMetadataStore(meta);
       if (groupList.length > 0) {
-        selectGroup(groupList[0]);
+        setScope(groupList[0].id);
+        void loadGroupsData([groupList[0]]);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load groups');
@@ -595,48 +838,38 @@ function App() {
     }
   }
 
-  // Tracks groups already loaded so we dedupe fetches across re-selections.
-  const loadedRef = useRef<Set<string>>(new Set());
-
-  // Fetch a single group's dictionary on demand. Takes the group object
-  // directly (no stale-closure over `groups`). `force` bypasses the cache.
-  const loadGroupData = useCallback(async (group: WorkerGroup, force = false) => {
-    if (!force && loadedRef.current.has(group.id)) return;
-    loadedRef.current.add(group.id);
-    try {
-      const dict = await loadGroupDataDictionary(group);
-      setDictCache(prev => ({ ...prev, [group.id]: dict }));
-      setError(null);
-    } catch (e) {
-      loadedRef.current.delete(group.id); // allow retry
-      setError(e instanceof Error ? e.message : `Failed to load group ${group.id}`);
-    }
-  }, []);
-
-  // Select a group and kick off its (lazy, cached) data load.
-  function selectGroup(group: WorkerGroup) {
-    setSelectedGroupId(group.id);
-    void loadGroupData(group);
+  // Switch scope and kick off whatever it needs that isn't cached yet.
+  function selectScope(next: string) {
+    setScope(next);
+    // Grouping by worker group is the point of the all-groups scope, so default
+    // to it — but never override a grouping the user deliberately picked.
+    setGroupByMode(mode => {
+      if (next === ALL_GROUPS) return mode === 'none' ? 'workerGroup' : mode;
+      return mode === 'workerGroup' ? 'none' : mode;
+    });
+    void loadGroupsData(groupsInScope(next, groups));
   }
 
   function refresh() {
-    const group = groups.find(g => g.id === selectedGroupId);
-    if (group) void loadGroupData(group, true);
+    if (!scope) return;
+    void loadGroupsData(groupsInScope(scope, groups), true);
   }
 
-  // Load the group list once on mount. loadGroupList's setState calls all run
-  // after an await (not synchronously), so the cascade rule is a false positive.
+  function retryFailed() {
+    const retryable = failedGroups
+      .map(f => groups.find(g => g.id === f.id))
+      .filter((g): g is WorkerGroup => !!g);
+    void loadGroupsData(retryable, true);
+  }
+
+  // Load the group list once on mount.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadGroupList();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleSaveMetadata = useCallback(async (key: string, meta: DataPathMetadata) => {
-    const updated = { ...metadataStore, [key]: meta };
-    if (!meta.owner && !meta.criticality && !meta.notes && !meta.dataSourceLabel) {
-      delete updated[key];
-    }
+  const handleSaveMetadata = useCallback(async (path: DataPath, meta: DataPathMetadata) => {
+    const updated = applyMetadataEdit(metadataStore, path, meta);
     setMetadataStore(updated);
     setSaveStatus('saving');
     try {
@@ -657,17 +890,34 @@ function App() {
     });
   }
 
-  const selectedGroup = selectedGroupId ? dictCache[selectedGroupId] : undefined;
-  const groupLoading = !!selectedGroupId && !selectedGroup && !error;
+  const showingAll = scope === ALL_GROUPS;
+  // Dictionaries currently on screen, in group-list order. An all-groups scope
+  // shows whatever has loaded so far; the rest stream in.
+  const visibleDicts = scope
+    ? groupsInScope(scope, groups)
+        .map(g => dictCache[g.id])
+        .filter((d): d is GroupDataDictionary => !!d)
+    : [];
+  const scopeGroupCount = scope ? groupsInScope(scope, groups).length : 0;
+  const anyLoading = loadingGroupIds.size > 0;
+  // Nothing to show yet and still fetching — distinct from "loaded and empty".
+  const scopeLoading = visibleDicts.length === 0 && anyLoading;
 
-  const filteredPaths = selectedGroup?.dataPaths.filter(path => {
+  // Status per group: ids are only unique within a group, so health must be
+  // resolved against the path's own group rather than one merged map.
+  const statusByGroup: StatusByGroup = {};
+  for (const dict of visibleDicts) statusByGroup[dict.group.id] = dict.status;
+
+  const allPaths = visibleDicts.flatMap(d => d.dataPaths);
+
+  const filteredPaths = allPaths.filter(path => {
     if (!showDisabled && path.disabled) return false;
 
     if (!searchTerm) return true;
     const term = searchTerm.toLowerCase();
-    const key = pathKeyOf(path);
-    const meta = metadataStore[key];
+    const meta = metaFor(metadataStore, path);
     return (
+      path.groupName.toLowerCase().includes(term) ||
       path.dataType.toLowerCase().includes(term) ||
       path.sourceDisplay.toLowerCase().includes(term) ||
       path.source?.id.toLowerCase().includes(term) ||
@@ -679,20 +929,26 @@ function App() {
       path.route?.name?.toLowerCase().includes(term) ||
       path.route?.description?.toLowerCase().includes(term) ||
       path.pipeline?.id.toLowerCase().includes(term) ||
-      meta?.owner?.toLowerCase().includes(term) ||
-      meta?.dataSourceLabel?.toLowerCase().includes(term) ||
-      meta?.criticality?.toLowerCase().includes(term)
+      meta.owner?.toLowerCase().includes(term) ||
+      meta.dataSourceLabel?.toLowerCase().includes(term) ||
+      meta.criticality?.toLowerCase().includes(term)
     );
-  }) ?? [];
+  });
 
   const grouped = groupPaths(filteredPaths, groupByMode, metadataStore);
+
+  // What the export is titled and named after: the one group, or the whole scope.
+  const scopeName = showingAll
+    ? 'All worker groups'
+    : visibleDicts[0]
+      ? visibleDicts[0].group.name || visibleDicts[0].group.id
+      : (scope ?? 'group');
 
   // Export the currently visible paths. Defined here (not memoized) so it closes
   // over the freshly computed `filteredPaths` each render.
   function handleExport(format: ExportFormat) {
-    if (!selectedGroup) return;
-    const groupName = selectedGroup.group.name || selectedGroup.group.id;
-    downloadExport(format, filteredPaths, metadataStore, selectedGroup.status, groupName);
+    if (filteredPaths.length === 0) return;
+    downloadExport(format, filteredPaths, metadataStore, statusByGroup, scopeName);
   }
 
   if (loading) {
@@ -717,8 +973,12 @@ function App() {
     );
   }
 
-  const activeSourceCount = selectedGroup?.sources.filter(s => !s.disabled).length ?? 0;
-  const totalSourceCount = selectedGroup?.sources.length ?? 0;
+  // Counts across every group on screen.
+  const activeSourceCount = visibleDicts.reduce(
+    (n, d) => n + d.sources.filter(s => !s.disabled).length, 0,
+  );
+  const totalSourceCount = visibleDicts.reduce((n, d) => n + d.sources.length, 0);
+  const destinationCount = visibleDicts.reduce((n, d) => n + d.destinations.length, 0);
 
   return (
     <div className="page">
@@ -727,12 +987,10 @@ function App() {
         <div className="header-controls">
           <select
             className="group-select"
-            value={selectedGroupId || ''}
-            onChange={e => {
-              const group = groups.find(g => g.id === e.target.value);
-              if (group) selectGroup(group);
-            }}
+            value={scope || ''}
+            onChange={e => selectScope(e.target.value)}
           >
+            <option value={ALL_GROUPS}>All worker groups</option>
             {groups.map(group => (
               <option key={group.id} value={group.id}>
                 {group.name || group.id}
@@ -762,6 +1020,16 @@ function App() {
               >
                 None
               </button>
+              {/* Only meaningful across groups — in a single-group scope it would
+                  put every path under one header. */}
+              {showingAll && (
+                <button
+                  className={`toggle-btn ${groupByMode === 'workerGroup' ? 'active' : ''}`}
+                  onClick={() => setGroupByMode('workerGroup')}
+                >
+                  Worker Group
+                </button>
+              )}
               <button
                 className={`toggle-btn ${groupByMode === 'owner' ? 'active' : ''}`}
                 onClick={() => setGroupByMode('owner')}
@@ -782,7 +1050,11 @@ function App() {
               </button>
             </div>
           </div>
-          <button className="refresh-btn" onClick={refresh}>Refresh</button>
+          {/* Disabled mid-load: Refresh forces past the cache, so a second click
+              would stack a duplicate fetch of every group in scope. */}
+          <button className="refresh-btn" onClick={refresh} disabled={anyLoading}>
+            {anyLoading ? 'Loading…' : 'Refresh'}
+          </button>
           <ExportMenu disabled={filteredPaths.length === 0} onExport={handleExport} />
           {saveStatus === 'saving' && <span className="save-indicator saving">Saving...</span>}
           {saveStatus === 'saved' && <span className="save-indicator saved">Saved</span>}
@@ -790,10 +1062,12 @@ function App() {
         </div>
       </header>
 
+      <IntroPanel />
+
       <div className="search-bar">
         <input
           type="text"
-          placeholder="Search sources, destinations, pipelines, owners..."
+          placeholder="Search worker groups, sources, destinations, pipelines, owners..."
           value={searchTerm}
           onChange={e => setSearchTerm(e.target.value)}
         />
@@ -802,15 +1076,21 @@ function App() {
         )}
       </div>
 
-      {selectedGroup && (
+      {visibleDicts.length > 0 && (
         <div className="stats-bar">
+          {showingAll && (
+            <span className="stat">
+              {visibleDicts.length} worker group{visibleDicts.length === 1 ? '' : 's'}
+              {visibleDicts.length < scopeGroupCount ? ` of ${scopeGroupCount}` : ''}
+            </span>
+          )}
           <span className="stat">{activeSourceCount} active sources{showDisabled ? ` (${totalSourceCount} total)` : ''}</span>
-          <span className="stat">{selectedGroup.destinations.length} destinations</span>
+          <span className="stat">{destinationCount} destinations</span>
           <span className="stat">{filteredPaths.length} data paths</span>
         </div>
       )}
 
-      {selectedGroup && <CoverageBanner dict={selectedGroup} />}
+      {visibleDicts.length > 0 && <CoverageBanner dicts={visibleDicts} />}
 
       {error && groups.length > 0 && (
         <div className="error-box inline">
@@ -819,12 +1099,45 @@ function App() {
         </div>
       )}
 
-      {groupLoading ? (
+      {/* Per-group failures: the groups that did load stay on screen. */}
+      {failedGroups.length > 0 && (
+        <div className="load-failures">
+          <div className="load-failures-text">
+            <strong>
+              {failedGroups.length} worker group{failedGroups.length === 1 ? '' : 's'} failed to load
+            </strong>
+            <ul>
+              {failedGroups.map(f => (
+                <li key={f.id}><span className="load-failure-group">{f.name}</span> — {f.message}</li>
+              ))}
+            </ul>
+          </div>
+          <button onClick={retryFailed} disabled={anyLoading}>Retry</button>
+        </div>
+      )}
+
+      {/* Still fetching, but some groups have already rendered — keep them on
+          screen and show progress rather than replacing everything with a spinner. */}
+      {anyLoading && visibleDicts.length > 0 && (
+        <div className="load-progress">
+          <div className="spinner small" />
+          <span>
+            Loaded {visibleDicts.length} of {scopeGroupCount} worker
+            group{scopeGroupCount === 1 ? '' : 's'}…
+          </span>
+        </div>
+      )}
+
+      {scopeLoading ? (
         <div className="loading">
           <div className="spinner" />
-          <p>Loading {groups.find(g => g.id === selectedGroupId)?.name || 'group'}…</p>
+          <p>
+            {showingAll
+              ? `Loading ${scopeGroupCount} worker group${scopeGroupCount === 1 ? '' : 's'}…`
+              : `Loading ${groups.find(g => g.id === scope)?.name || 'group'}…`}
+          </p>
         </div>
-      ) : selectedGroup ? (
+      ) : visibleDicts.length > 0 ? (
         <section className="paths-section">
           {filteredPaths.length === 0 ? (
             <div className="empty">No matching data paths found.</div>
@@ -845,10 +1158,10 @@ function App() {
                       path={path}
                       expanded={expandedPaths.has(key)}
                       onToggle={() => togglePath(key)}
-                      metadata={metadataStore[key] || {}}
-                      pathKey={key}
-                      groupId={selectedGroup.group.id}
-                      status={selectedGroup.status}
+                      metadata={metaFor(metadataStore, path)}
+                      // Redundant once the list is already sectioned by group.
+                      showGroup={showingAll && groupByMode !== 'workerGroup'}
+                      status={statusByGroup[path.groupId]}
                       onSaveMetadata={handleSaveMetadata}
                     />
                   );

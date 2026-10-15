@@ -1,8 +1,15 @@
-import type { Source, Destination, RouteEntry, Pipeline, DataPath, GroupDataDictionary, WorkerGroup, Coverage, GroupStatus } from './types';
+import type { Source, Destination, RouteEntry, Pipeline, DataPath, UntaggedDataPath, GroupDataDictionary, WorkerGroup, Coverage, GroupStatus } from './types';
 import {
   fetchGroups, fetchSources, fetchDestinations, fetchRoutes, fetchPipelines, fetchGroupStatus,
   fetchPacks, fetchPackSources, fetchPackDestinations, fetchPackRoutes, fetchPackPipelines,
 } from './api';
+import { mapWithConcurrency } from './concurrency';
+
+// Packs inside one group are loaded in parallel, but bounded: with several groups
+// in flight for the "All worker groups" scope, an unbounded fan-out over every
+// installed pack is what tips the Leader into "config helper cannot be booted
+// because the leader is under load".
+const PACK_FETCH_CONCURRENCY = 4;
 
 // How a route constrains the source __inputId. `eq` is exact match; the others
 // mirror the JS string methods Cribl filters commonly use.
@@ -52,7 +59,7 @@ function sourceMatchesConstraint(source: Source, constraint: InputConstraint): b
  * filter text. Returns 'true' (match everything on this route) when there is no
  * meaningful constraint to apply.
  */
-export function buildCaptureFilter(path: DataPath): string {
+export function buildCaptureFilter(path: UntaggedDataPath): string {
   // QuickConnect paths don't go through a route; scope the capture to the
   // source's events by __inputId.
   if (path.kind === 'quickconnect') {
@@ -94,7 +101,29 @@ function extractFilterQualifiers(filter: string): string[] {
   return qualifiers;
 }
 
-// Build the data-type label from description + index/sourcetype qualifiers.
+// One __inputId constraint, in either form the filters use: equality (== / ===)
+// or a string method predicate. Mirrors getRouteInputConstraint's patterns.
+const INPUT_ID_CLAUSE =
+  String.raw`__inputId\s*(?:={2,3}\s*['"][^'"]+['"]|\.\s*(?:startsWith|endsWith|includes)\s*\(\s*['"][^'"]+['"]\s*\))`;
+
+// Drop the __inputId part of a filter, so a label built from what remains
+// describes the DATA rather than repeating the source the source slot already names.
+function stripInputIdClauses(filter: string): string {
+  return filter
+    .replace(new RegExp(`${INPUT_ID_CLAUSE}\\s*&&\\s*`, 'g'), '')
+    .replace(new RegExp(`\\s*&&\\s*${INPUT_ID_CLAUSE}`, 'g'), '')
+    .replace(new RegExp(`^\\s*${INPUT_ID_CLAUSE}\\s*$`), '')
+    .trim();
+}
+
+// A filter that constrains nothing, so it can't identify a slice of data.
+function isTrivialFilter(filter: string): boolean {
+  const trimmed = filter.trim();
+  return trimmed === '' || trimmed === 'true' || trimmed === '1';
+}
+
+// Build the data-type label: description → index/sourcetype qualifiers → the
+// filter expression → the route name.
 function deriveDataType(route: RouteEntry, fallback: string): string {
   const qualifiers = route.filter ? extractFilterQualifiers(route.filter) : [];
 
@@ -108,17 +137,19 @@ function deriveDataType(route: RouteEntry, fallback: string): string {
     return qualifiers.join(', ');
   }
 
-  // Fall back to any remaining meaningful filter expression (minus __inputId).
+  // Nothing human-authored and no well-known qualifier: the filter expression
+  // itself is what identifies this slice of data. Routes with no __inputId
+  // constraint depend on this — otherwise every filter-based route to the same
+  // destination renders as an indistinguishable "any source" row.
   if (route.filter) {
-    const stripped = route.filter
-      .replace(/__inputId\s*={2,3}\s*['"][^'"]+['"]\s*&&\s*/, '')
-      .replace(/\s*&&\s*__inputId\s*={2,3}\s*['"][^'"]+['"]/, '')
-      .trim();
-
-    if (stripped && stripped !== route.filter && stripped !== 'true' && stripped !== '1') {
-      return stripped;
-    }
+    const stripped = stripInputIdClauses(route.filter);
+    if (!isTrivialFilter(stripped)) return stripped;
   }
+
+  // A route with no filter left to describe it: use its name, but only when the
+  // route isn't source-specific — for those, `fallback` is the source itself,
+  // which identifies the path better than a route name like "route1".
+  if (route.name && !getRouteInputConstraint(route)) return route.name;
 
   return fallback;
 }
@@ -136,10 +167,10 @@ function buildDataPaths(
   pipelines: Pipeline[],
   // When set, every emitted path is tagged as living inside this pack.
   packId?: string
-): DataPath[] {
+): UntaggedDataPath[] {
   const destMap = new Map(destinations.map(d => [d.id, d]));
   const pipelineMap = new Map(pipelines.map(p => [p.id, p]));
-  const paths: DataPath[] = [];
+  const paths: UntaggedDataPath[] = [];
 
   // Iterate routes (not sources). A route with an __inputId/input constraint is
   // source-specific and emits one entry per matching source. A route without one
@@ -230,7 +261,7 @@ function buildDataPaths(
 
 // Identify configuration gaps: sources with no outgoing path, and destinations
 // nothing routes to. Computed from the structural data paths we already built.
-function computeCoverage(sources: Source[], destinations: Destination[], dataPaths: DataPath[]): Coverage {
+function computeCoverage(sources: Source[], destinations: Destination[], dataPaths: UntaggedDataPath[]): Coverage {
   const sourcesWithPath = new Set<string>();
   const destsUsed = new Set<string>();
   // Content/catch-all routes (kind 'route', no attributed source) can match any
@@ -265,7 +296,7 @@ interface Scope {
   destinations: Destination[];
   routes: RouteEntry[];
   pipelines: Pipeline[];
-  dataPaths: DataPath[];
+  dataPaths: UntaggedDataPath[];
   status: GroupStatus;
 }
 
@@ -295,7 +326,7 @@ function isNonflowingDestination(dest: Destination): boolean {
 // dropped. A real destination must also report active health (Unknown = no
 // worker processing it, nothing flowing); Green/Yellow/Red all count as live.
 // QuickConnect paths aren't routes, so they're always kept.
-function packPathInUse(path: DataPath, status: GroupStatus): boolean {
+function packPathInUse(path: UntaggedDataPath, status: GroupStatus): boolean {
   if (path.kind !== 'route') return true;
   if (path.route && isHandoffRoute(path.route)) return false;
   if (isNonflowingDestination(path.destination)) return false;
@@ -337,7 +368,7 @@ function buildStitchedPaths(
   groupRoutes: RouteEntry[],
   groupDestinations: Destination[],
   groupPipelines: Pipeline[],
-): DataPath[] {
+): UntaggedDataPath[] {
   const groupMatches = groupRoutes.filter(r => groupRouteMatchesPack(r, packId));
   if (groupMatches.length === 0) return [];
 
@@ -347,7 +378,7 @@ function buildStitchedPaths(
 
   // Track each path's specificity so we can drop the pack's catch-all passthrough
   // when a source-specific route already reaches the same destination.
-  const built: { path: DataPath; catchAll: boolean }[] = [];
+  const built: { path: UntaggedDataPath; catchAll: boolean }[] = [];
 
   for (const packRoute of packRoutes) {
     if (!isHandoffRoute(packRoute)) continue;
@@ -457,7 +488,13 @@ export async function loadGroupDataDictionary(group: WorkerGroup): Promise<Group
     fetchPacks(group.id).catch(() => []),
   ]);
 
-  const packScopes = await Promise.all(packs.map(pack => loadPackScope(group.id, pack.id)));
+  // Bounded fan-out: loadPackScope never rejects (it degrades to an empty scope),
+  // so every settled result is fulfilled — but the limit keeps a group with many
+  // packs from bursting the Leader, especially with several groups loading at once.
+  const packResults = await mapWithConcurrency(packs, PACK_FETCH_CONCURRENCY, pack =>
+    loadPackScope(group.id, pack.id),
+  );
+  const packScopes = packResults.flatMap(r => (r.status === 'fulfilled' ? [r.value] : []));
 
   // Merge group scope with every pack scope. Status maps combine into one keyed
   // set (pack entity ids are distinct from group ids in practice). Pack sources/
@@ -483,7 +520,14 @@ export async function loadGroupDataDictionary(group: WorkerGroup): Promise<Group
     ),
   );
 
-  const dataPaths = [...groupPaths, ...packScopes.flatMap(s => s.dataPaths), ...stitchedPaths];
+  // Tag every path with its worker group in one place, so the builders above stay
+  // scope-agnostic and the UI can mix paths from several groups in one list.
+  const groupName = group.name || group.id;
+  const dataPaths: DataPath[] = [
+    ...groupPaths,
+    ...packScopes.flatMap(s => s.dataPaths),
+    ...stitchedPaths,
+  ].map(path => ({ ...path, groupId: group.id, groupName }));
 
   const mergedStatus: GroupStatus = {
     inputs: { ...status.inputs, ...Object.assign({}, ...packScopes.map(s => s.status.inputs)) },
