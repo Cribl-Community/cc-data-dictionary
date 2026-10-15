@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <script>window.CRIBL_APP_ID = '__dev__cc-data-dictionary';</script>
+
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>data-dictionary</title>
+    <!--
+      Set the theme before first paint, so a dark-theme user doesn't get a white
+      flash while the bundle loads and React's effect runs. Deliberately
+      duplicates the key and fallback in src/App.tsx (useTheme) — this has to run
+      with no imports and no bundle, so it can't share the code. Keep in sync.
+
+      The inline style covers the gap the script alone can't: data-theme is set
+      immediately, but App.css (which defines what that attribute means) arrives
+      with the bundle, so the page would still flash white until then.
+    -->
+    <style>
+      html[data-theme='dark'] {
+        color-scheme: dark;
+        background: #14161c;
+      }
+    </style>
+    <script>
+      (function () {
+        var theme = 'dark'; // Default, matching DEFAULT_THEME in src/App.tsx.
+        try {
+          var stored = window.localStorage.getItem('data-dictionary:theme');
+          if (stored === 'light' || stored === 'dark') theme = stored;
+        } catch (e) {
+          /* Sandboxed iframes can refuse storage access; fall back to default. */
+        }
+        document.documentElement.setAttribute('data-theme', theme);
+      })();
+    </script>
+    <script type="module" crossorigin src="./assets/index-BBz-WZU7.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-BdHPVUfM.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
