@@ -29,13 +29,6 @@ const GROUP_FETCH_CONCURRENCY = 3;
 type Criticality = 'low' | 'medium' | 'high' | 'critical';
 type GroupBy = 'none' | 'workerGroup' | 'owner' | 'criticality' | 'destination';
 
-const CRITICALITY_COLORS: Record<Criticality, string> = {
-  low: '#52c41a',
-  medium: '#faad14',
-  high: '#fa541c',
-  critical: '#cf1322',
-};
-
 const CRITICALITY_ORDER: Record<string, number> = {
   critical: 0,
   high: 1,
@@ -44,13 +37,11 @@ const CRITICALITY_ORDER: Record<string, number> = {
   '': 4,
 };
 
+// Colour comes from a CSS class, not an inline style: an inline background is
+// unreachable by the theme, so a dark-mode palette can't touch it.
 function CriticalityBadge({ level }: { level?: Criticality }) {
   if (!level) return null;
-  return (
-    <span className="criticality-badge" style={{ backgroundColor: CRITICALITY_COLORS[level] }}>
-      {level}
-    </span>
-  );
+  return <span className={`criticality-badge criticality-${level}`}>{level}</span>;
 }
 
 function MetadataEditor({
@@ -248,18 +239,10 @@ function FieldExplorer({ groupId, path }: { groupId: string; path: DataPath }) {
   );
 }
 
-const HEALTH_COLORS: Record<Health, string> = {
-  Green: '#52c41a',
-  Yellow: '#faad14',
-  Red: '#cf1322',
-  Unknown: '#bfbfbf',
-};
-
 function HealthDot({ health, title }: { health: Health; title?: string }) {
   return (
     <span
-      className="health-dot"
-      style={{ backgroundColor: HEALTH_COLORS[health] }}
+      className={`health-dot health-${health.toLowerCase()}`}
       title={title || `Health: ${health}`}
     />
   );
@@ -544,6 +527,107 @@ function groupPaths(
   return entries;
 }
 
+type Theme = 'light' | 'dark';
+
+const THEME_KEY = 'data-dictionary:theme';
+const DARK_QUERY = '(prefers-color-scheme: dark)';
+
+// Only 'light'/'dark' count; anything else means the user hasn't chosen and we
+// should follow the OS. Reads can throw in a sandboxed iframe, so guard them.
+function readStoredTheme(): Theme | null {
+  try {
+    const stored = window.localStorage.getItem(THEME_KEY);
+    return stored === 'light' || stored === 'dark' ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+function systemTheme(): Theme {
+  return window.matchMedia?.(DARK_QUERY).matches ? 'dark' : 'light';
+}
+
+/**
+ * Current theme, applied to <html data-theme> so the CSS token blocks can pick
+ * it up. Follows the OS until the user picks one, then remembers the choice.
+ *
+ * Note the app is in an iframe, so `prefers-color-scheme` reflects the OS/browser
+ * setting, NOT whatever theme the surrounding Cribl UI is set to — the platform
+ * exposes no theme signal. Hence the manual toggle: following the system alone
+ * would strand anyone running Cribl dark on a light OS, or the reverse.
+ */
+function useTheme(): [Theme, () => void] {
+  const [theme, setTheme] = useState<Theme>(() => readStoredTheme() ?? systemTheme());
+  // Whether we're still tracking the OS. A stored choice outranks it.
+  const [followSystem, setFollowSystem] = useState(() => readStoredTheme() === null);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (!followSystem || !window.matchMedia) return;
+    const mq = window.matchMedia(DARK_QUERY);
+    const onChange = (e: MediaQueryListEvent) => setTheme(e.matches ? 'dark' : 'light');
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, [followSystem]);
+
+  const toggle = useCallback(() => {
+    setTheme(prev => {
+      const next: Theme = prev === 'dark' ? 'light' : 'dark';
+      try {
+        window.localStorage.setItem(THEME_KEY, next);
+      } catch {
+        // The theme still applies for this session; it just won't be remembered.
+      }
+      return next;
+    });
+    setFollowSystem(false);
+  }, []);
+
+  return [theme, toggle];
+}
+
+// Inline SVG rather than ☀/🌙: those render as full-colour emoji on some
+// platforms and as a bare glyph on others. `currentColor` also means the icon
+// picks up the button's hover colour for free.
+function SunIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+      <circle cx="8" cy="8" r="3.1" fill="currentColor" />
+      <g stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+        <line x1="8" y1="0.9" x2="8" y2="2.5" />
+        <line x1="8" y1="13.5" x2="8" y2="15.1" />
+        <line x1="0.9" y1="8" x2="2.5" y2="8" />
+        <line x1="13.5" y1="8" x2="15.1" y2="8" />
+        <line x1="3.1" y1="3.1" x2="4.3" y2="4.3" />
+        <line x1="11.7" y1="11.7" x2="12.9" y2="12.9" />
+        <line x1="3.1" y1="12.9" x2="4.3" y2="11.7" />
+        <line x1="11.7" y1="4.3" x2="12.9" y2="3.1" />
+      </g>
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+      <path d="M13.8 10.6A6.2 6.2 0 0 1 5.4 2.2a6.2 6.2 0 1 0 8.4 8.4z" fill="currentColor" />
+    </svg>
+  );
+}
+
+// Shows the theme you'd switch TO, which is what the click does.
+function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {
+  const label = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+  return (
+    <button className="theme-btn" onClick={onToggle} title={label} aria-label={label}>
+      {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+    </button>
+  );
+}
+
 const INTRO_COLLAPSED_KEY = 'data-dictionary:intro-collapsed';
 
 // The app runs in a sandboxed iframe, where touching localStorage can throw
@@ -763,6 +847,7 @@ function App() {
   const [showDisabled, setShowDisabled] = useState(false);
   const [groupByMode, setGroupByMode] = useState<GroupBy>('none');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [theme, toggleTheme] = useTheme();
 
   // Tracks groups already loaded so we dedupe fetches across re-selections.
   const loadedRef = useRef<Set<string>>(new Set());
@@ -1056,6 +1141,7 @@ function App() {
             {anyLoading ? 'Loading…' : 'Refresh'}
           </button>
           <ExportMenu disabled={filteredPaths.length === 0} onExport={handleExport} />
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
           {saveStatus === 'saving' && <span className="save-indicator saving">Saving...</span>}
           {saveStatus === 'saved' && <span className="save-indicator saved">Saved</span>}
           {saveStatus === 'error' && <span className="save-indicator error">Save failed</span>}

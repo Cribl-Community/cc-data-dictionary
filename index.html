@@ -5,6 +5,38 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>data-dictionary</title>
+    <!--
+      Set the theme before first paint, so a dark-theme user doesn't get a white
+      flash while the bundle loads and React's effect runs. Deliberately
+      duplicates the key and fallback in src/App.tsx (useTheme) — this has to run
+      with no imports and no bundle, so it can't share the code. Keep in sync.
+
+      The inline style covers the gap the script alone can't: data-theme is set
+      immediately, but App.css (which defines what that attribute means) arrives
+      with the bundle, so the page would still flash white until then.
+    -->
+    <style>
+      html[data-theme='dark'] {
+        color-scheme: dark;
+        background: #14161c;
+      }
+    </style>
+    <script>
+      (function () {
+        try {
+          var stored = window.localStorage.getItem('data-dictionary:theme');
+          var theme =
+            stored === 'light' || stored === 'dark'
+              ? stored
+              : window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light';
+          document.documentElement.setAttribute('data-theme', theme);
+        } catch (e) {
+          /* Sandboxed iframes can refuse storage access; light is the default. */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

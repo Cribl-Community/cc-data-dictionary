@@ -21,7 +21,8 @@ Understanding what data moves through a Cribl deployment usually means clicking 
 4. **Annotate each path** — attach an **owner**, **criticality** (low / medium / high / critical), a data-source label, and free-form notes. Metadata persists in the Cribl KV store, so it's shared across everyone using the app.
 5. **Group and scan** — view paths grouped by worker group, owner, criticality, or destination to quickly find unowned or business-critical flows. The owner / criticality / destination groupings roll up *across* worker groups, so "every critical path in the deployment" is one selection.
 6. **See inside packs** — sources, destinations, and routes defined inside installed packs are surfaced too (badged with the pack name). When a pack hands events back to the worker group routing table, the full flow is stitched together: pack source → pack pipeline → routing table → group pipeline → destination.
-7. **Export** — download the currently visible paths (respecting search and the Active/All filter) as **CSV**, **JSON**, or **Markdown** from the Export menu in the header.
+7. **Light or dark** — the header toggle switches theme. It follows your OS setting until you pick one, then remembers your choice. (The app runs in an iframe, so it sees the OS preference rather than whatever theme the surrounding Cribl UI is set to — hence the manual override.)
+8. **Export** — download the currently visible paths (respecting search and the Active/All filter) as **CSV**, **JSON**, or **Markdown** from the Export menu in the header.
 
 ### How discovery works
 
@@ -53,7 +54,7 @@ Go to App Platform > Development > Live Preview
 
 | Version | Changes |
 | --- | --- |
-| 1.2.0 | Added an **All worker groups** scope (groups load progressively, partial failures listed per group) with a Worker Group grouping mode and a Worker Group export column. Routes with no `__inputId` constraint are now labelled by their filter expression or route name instead of reading as "any source". Path metadata keys are group-scoped; older keys are still read. |
+| 1.2.0 | Added a **light/dark theme toggle** (follows the OS until you choose; every colour now resolves through a theme token in `src/App.css`). Added an **All worker groups** scope (groups load progressively, partial failures listed per group) with a Worker Group grouping mode and a Worker Group export column. Routes with no `__inputId` constraint are now labelled by their filter expression or route name instead of reading as "any source". Path metadata keys are group-scoped; older keys are still read. |
 | 1.1.2 | Install via the Cribl Marketplace (replaces Import from Git); lowercased package name and repository URL. |
 | 1.1.0 | Added pack support (sources/destinations/routes inside packs, including pack → worker group routing table stitching) and data dictionary export (CSV, JSON, Markdown). |
 
