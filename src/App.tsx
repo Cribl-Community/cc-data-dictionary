@@ -387,7 +387,15 @@ function DataPathCard({
             <span className="owner-label">{metadata.owner}</span>
           )}
           <CriticalityBadge level={metadata.criticality} />
-          {showGroup && <span className="group-badge" title={`Worker group: ${path.groupName}`}>{path.groupName}</span>}
+          {showGroup && (
+            <span
+              className="group-badge"
+              title={path.groupType === 'edge' ? `Edge fleet: ${path.groupName}` : `Worker group: ${path.groupName}`}
+            >
+              {path.groupType === 'edge' && <span className="group-badge-kind">Edge</span>}
+              {path.groupName}
+            </span>
+          )}
           {path.pack && <span className="pack-badge" title={`Defined in pack: ${path.pack}`}>📦 {path.pack}</span>}
           {path.stitch && <span className="stitch-badge" title="Pack routes back through the worker group routing table">↩ via routing table</span>}
           {path.kind === 'quickconnect' && <span className="quickconnect-badge">QuickConnect</span>}
@@ -530,10 +538,10 @@ function groupPaths(
 type Theme = 'light' | 'dark';
 
 const THEME_KEY = 'data-dictionary:theme';
-const DARK_QUERY = '(prefers-color-scheme: dark)';
+const DEFAULT_THEME: Theme = 'dark';
 
-// Only 'light'/'dark' count; anything else means the user hasn't chosen and we
-// should follow the OS. Reads can throw in a sandboxed iframe, so guard them.
+// Only 'light'/'dark' count; anything else means no choice has been made yet.
+// Reads can throw in a sandboxed iframe, so guard them.
 function readStoredTheme(): Theme | null {
   try {
     const stored = window.localStorage.getItem(THEME_KEY);
@@ -543,35 +551,21 @@ function readStoredTheme(): Theme | null {
   }
 }
 
-function systemTheme(): Theme {
-  return window.matchMedia?.(DARK_QUERY).matches ? 'dark' : 'light';
-}
-
 /**
  * Current theme, applied to <html data-theme> so the CSS token blocks can pick
- * it up. Follows the OS until the user picks one, then remembers the choice.
+ * it up. Dark by default; switching remembers the choice.
  *
- * Note the app is in an iframe, so `prefers-color-scheme` reflects the OS/browser
- * setting, NOT whatever theme the surrounding Cribl UI is set to — the platform
- * exposes no theme signal. Hence the manual toggle: following the system alone
- * would strand anyone running Cribl dark on a light OS, or the reverse.
+ * The OS preference is deliberately NOT consulted. The app runs in an iframe, so
+ * `prefers-color-scheme` reports the OS/browser setting rather than the theme of
+ * the surrounding Cribl UI — and the platform exposes no theme signal — so it's
+ * a poor proxy for what would actually look right embedded in the page.
  */
 function useTheme(): [Theme, () => void] {
-  const [theme, setTheme] = useState<Theme>(() => readStoredTheme() ?? systemTheme());
-  // Whether we're still tracking the OS. A stored choice outranks it.
-  const [followSystem, setFollowSystem] = useState(() => readStoredTheme() === null);
+  const [theme, setTheme] = useState<Theme>(() => readStoredTheme() ?? DEFAULT_THEME);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);
   }, [theme]);
-
-  useEffect(() => {
-    if (!followSystem || !window.matchMedia) return;
-    const mq = window.matchMedia(DARK_QUERY);
-    const onChange = (e: MediaQueryListEvent) => setTheme(e.matches ? 'dark' : 'light');
-    mq.addEventListener('change', onChange);
-    return () => mq.removeEventListener('change', onChange);
-  }, [followSystem]);
 
   const toggle = useCallback(() => {
     setTheme(prev => {
@@ -583,7 +577,6 @@ function useTheme(): [Theme, () => void] {
       }
       return next;
     });
-    setFollowSystem(false);
   }, []);
 
   return [theme, toggle];
@@ -726,8 +719,10 @@ function IntroPanel() {
               <h3>Working with it</h3>
               <ul className="intro-list">
                 <li>
-                  <strong>Pick a worker group</strong>, or <strong>All worker groups</strong>{' '}
-                  to audit the whole deployment at once. Groups appear as they load.
+                  <strong>Pick a worker group or Edge fleet</strong>, or{' '}
+                  <strong>All worker groups &amp; fleets</strong> to audit the whole
+                  deployment at once. Groups appear as they load, and fleets are marked{' '}
+                  <span className="edge-badge">Edge</span>.
                 </li>
                 <li>
                   <strong>Click any path</strong> to annotate it with an owner, criticality,
@@ -1058,6 +1053,12 @@ function App() {
     );
   }
 
+  const streamGroups = groups.filter(g => g.type === 'stream');
+  const edgeGroups = groups.filter(g => g.type === 'edge');
+  // The single group in scope, when exactly one is selected — used to badge the
+  // stats bar so you can tell a fleet from a worker group at a glance.
+  const soleGroup = showingAll ? undefined : groups.find(g => g.id === scope);
+
   // Counts across every group on screen.
   const activeSourceCount = visibleDicts.reduce(
     (n, d) => n + d.sources.filter(s => !s.disabled).length, 0,
@@ -1075,12 +1076,28 @@ function App() {
             value={scope || ''}
             onChange={e => selectScope(e.target.value)}
           >
-            <option value={ALL_GROUPS}>All worker groups</option>
-            {groups.map(group => (
-              <option key={group.id} value={group.id}>
-                {group.name || group.id}
-              </option>
-            ))}
+            <option value={ALL_GROUPS}>All worker groups &amp; fleets</option>
+            {/* Split into optgroups so Edge fleets are labelled as such at the
+                point of selection. Flat list when there's only one kind, rather
+                than a lone section header. */}
+            {streamGroups.length > 0 && edgeGroups.length > 0 ? (
+              <>
+                <optgroup label="Stream worker groups">
+                  {streamGroups.map(group => (
+                    <option key={group.id} value={group.id}>{group.name || group.id}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Edge fleets">
+                  {edgeGroups.map(group => (
+                    <option key={group.id} value={group.id}>{group.name || group.id}</option>
+                  ))}
+                </optgroup>
+              </>
+            ) : (
+              groups.map(group => (
+                <option key={group.id} value={group.id}>{group.name || group.id}</option>
+              ))
+            )}
           </select>
           <div className="view-toggle">
             <button
@@ -1166,8 +1183,14 @@ function App() {
         <div className="stats-bar">
           {showingAll && (
             <span className="stat">
-              {visibleDicts.length} worker group{visibleDicts.length === 1 ? '' : 's'}
+              {visibleDicts.length} group{visibleDicts.length === 1 ? '' : 's'}
               {visibleDicts.length < scopeGroupCount ? ` of ${scopeGroupCount}` : ''}
+              {edgeGroups.length > 0 && ` (${streamGroups.length} Stream · ${edgeGroups.length} Edge)`}
+            </span>
+          )}
+          {soleGroup && (
+            <span className="stat">
+              {soleGroup.type === 'edge' ? 'Edge fleet' : 'Stream worker group'}
             </span>
           )}
           <span className="stat">{activeSourceCount} active sources{showDisabled ? ` (${totalSourceCount} total)` : ''}</span>
@@ -1233,6 +1256,10 @@ function App() {
                 {groupByMode !== 'none' && (
                   <div className="path-group-header">
                     <span className="path-group-title">{group.label}</span>
+                    {/* Sectioned by group, so say which sections are fleets. */}
+                    {groupByMode === 'workerGroup' && group.paths[0]?.groupType === 'edge' && (
+                      <span className="edge-badge" title="Cribl Edge fleet">Edge</span>
+                    )}
                     <span className="path-group-count">{group.paths.length}</span>
                   </div>
                 )}

@@ -5,10 +5,22 @@ declare global {
   }
 }
 
+/**
+ * The group kinds this app can build a data dictionary for: a Stream worker
+ * group or an Edge fleet. Both use the same source → route → destination model,
+ * so they're discovered identically.
+ *
+ * `/master/groups` also returns `search`, `lake_access`, `local_search` and
+ * `outpost` groups, which have no Routes table to walk — those are dropped in
+ * fetchGroups rather than surfaced as permanently empty rows.
+ */
+export type GroupType = 'stream' | 'edge';
+
 export interface WorkerGroup {
   id: string;
   name?: string;
   description?: string;
+  type: GroupType;
 }
 
 // A QuickConnect link: a source wired directly to a destination (and optionally
@@ -79,11 +91,13 @@ export interface Pack {
 }
 
 export interface DataPath {
-  // Worker group this path lives in. Every path carries it so status lookups,
-  // captures, grouping and export behave identically whether the UI is scoped to
-  // one group or to all of them (entity ids are only unique WITHIN a group).
+  // Worker group (or Edge fleet) this path lives in. Every path carries it so
+  // status lookups, captures, grouping and export behave identically whether the
+  // UI is scoped to one group or to all of them (entity ids are only unique
+  // WITHIN a group).
   groupId: string;
   groupName: string;
+  groupType: GroupType;
   // How the data reaches the destination: through the Routes table, or via a
   // direct QuickConnect link on the source.
   kind: 'route' | 'quickconnect';
@@ -119,7 +133,7 @@ export interface DataPath {
 // A data path before its worker group is attached. The builders work within one
 // scope at a time and don't know (or need) the group, so they emit these and
 // loadGroupDataDictionary tags them once at the end.
-export type UntaggedDataPath = Omit<DataPath, 'groupId' | 'groupName'>;
+export type UntaggedDataPath = Omit<DataPath, 'groupId' | 'groupName' | 'groupType'>;
 
 // Health of a source or destination, from /system/status/*.
 export type Health = 'Green' | 'Yellow' | 'Red' | 'Unknown';

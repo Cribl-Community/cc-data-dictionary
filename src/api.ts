@@ -1,4 +1,4 @@
-import type { WorkerGroup, Source, Destination, RoutesConfig, Pipeline, NodeStatus, GroupStatus, Health, Pack } from './types';
+import type { WorkerGroup, GroupType, Source, Destination, RoutesConfig, Pipeline, NodeStatus, GroupStatus, Health, Pack } from './types';
 
 const getApiUrl = () => window.CRIBL_API_URL || 'http://localhost:9000/api/v1';
 
@@ -25,9 +25,47 @@ async function apiFetch<T>(path: string): Promise<T> {
   }
 }
 
+// Raw ConfigGroup from /master/groups — every config group in the deployment, of
+// every product type, not just Stream worker groups.
+interface RawConfigGroup {
+  id: string;
+  name?: string;
+  description?: string;
+  // Modern discriminator: 'stream' | 'edge' | 'search' | 'lake_access' |
+  // 'local_search' | 'outpost'.
+  type?: string;
+  // Deprecated per the API spec, but still the only Edge/Search signal on
+  // Leaders predating `type`.
+  isFleet?: boolean;
+  isSearch?: boolean;
+}
+
+// Which kind of group this is, or null for a product with no Routes table to
+// walk (Search, Lake, Outpost) — those would only ever render as empty.
+function classifyGroup(raw: RawConfigGroup): GroupType | null {
+  if (raw.type) {
+    if (raw.type === 'edge') return 'edge';
+    return raw.type === 'stream' ? 'stream' : null;
+  }
+  // No `type`: fall back to the deprecated booleans.
+  if (raw.isFleet) return 'edge';
+  if (raw.isSearch) return null;
+  return 'stream';
+}
+
+// Stream worker groups and Edge fleets, in the order the Leader returns them.
+//
+// /master/groups is marked deprecated in favour of /products/{product}/groups,
+// which would need one call per product. It still returns every group with its
+// `type`, so one call plus client-side classification is cheaper; revisit if the
+// Leader ever stops serving it.
 export async function fetchGroups(): Promise<WorkerGroup[]> {
-  const data = await apiFetch<{ items: WorkerGroup[] }>('/master/groups');
-  return data.items;
+  const data = await apiFetch<{ items: RawConfigGroup[] }>('/master/groups');
+  return (data.items ?? []).flatMap(raw => {
+    const type = classifyGroup(raw);
+    if (!type) return [];
+    return [{ id: raw.id, name: raw.name, description: raw.description, type }];
+  });
 }
 
 export async function fetchSources(groupId: string): Promise<Source[]> {

@@ -14,6 +14,7 @@ export type StatusByGroup = Record<string, GroupStatus>;
 // renderers so their columns never drift apart.
 interface ExportRow {
   workerGroup: string;
+  workerGroupType: string;
   dataSourceLabel: string;
   dataType: string;
   pack: string;
@@ -44,6 +45,7 @@ function healthOf(id: string | undefined, map: Record<string, { health: Health }
 function toRow(path: DataPath, meta: DataPathMetadata, status?: GroupStatus): ExportRow {
   return {
     workerGroup: path.groupName,
+    workerGroupType: path.groupType,
     dataSourceLabel: meta.dataSourceLabel || path.dataType,
     dataType: path.dataType,
     pack: path.pack ?? '',
@@ -70,6 +72,7 @@ function toRow(path: DataPath, meta: DataPathMetadata, status?: GroupStatus): Ex
 // Ordered [key -> header] so a single list drives column order + labels.
 const COLUMNS: [keyof ExportRow, string][] = [
   ['workerGroup', 'Worker Group'],
+  ['workerGroupType', 'Group Type'],
   ['dataSourceLabel', 'Data Source Label'],
   ['dataType', 'Data Type'],
   ['pack', 'Pack'],
@@ -130,6 +133,7 @@ function toJson(paths: DataPath[], metadataStore: MetadataStore, statusByGroup: 
     paths: paths.map(path => ({
       workerGroup: path.groupName,
       workerGroupId: path.groupId,
+      workerGroupType: path.groupType,
       dataType: path.dataType,
       pack: path.pack ?? null,
       connection: path.kind,

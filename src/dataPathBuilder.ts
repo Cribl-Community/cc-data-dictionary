@@ -527,7 +527,7 @@ export async function loadGroupDataDictionary(group: WorkerGroup): Promise<Group
     ...groupPaths,
     ...packScopes.flatMap(s => s.dataPaths),
     ...stitchedPaths,
-  ].map(path => ({ ...path, groupId: group.id, groupName }));
+  ].map(path => ({ ...path, groupId: group.id, groupName, groupType: group.type }));
 
   const mergedStatus: GroupStatus = {
     inputs: { ...status.inputs, ...Object.assign({}, ...packScopes.map(s => s.status.inputs)) },

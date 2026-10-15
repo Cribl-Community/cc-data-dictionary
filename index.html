@@ -23,18 +23,14 @@
     </style>
     <script>
       (function () {
+        var theme = 'dark'; // Default, matching DEFAULT_THEME in src/App.tsx.
         try {
           var stored = window.localStorage.getItem('data-dictionary:theme');
-          var theme =
-            stored === 'light' || stored === 'dark'
-              ? stored
-              : window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
-                ? 'dark'
-                : 'light';
-          document.documentElement.setAttribute('data-theme', theme);
+          if (stored === 'light' || stored === 'dark') theme = stored;
         } catch (e) {
-          /* Sandboxed iframes can refuse storage access; light is the default. */
+          /* Sandboxed iframes can refuse storage access; fall back to default. */
         }
+        document.documentElement.setAttribute('data-theme', theme);
       })();
     </script>
   </head>
