@@ -29,13 +29,6 @@ const GROUP_FETCH_CONCURRENCY = 3;
 type Criticality = 'low' | 'medium' | 'high' | 'critical';
 type GroupBy = 'none' | 'workerGroup' | 'owner' | 'criticality' | 'destination';
 
-const CRITICALITY_COLORS: Record<Criticality, string> = {
-  low: '#52c41a',
-  medium: '#faad14',
-  high: '#fa541c',
-  critical: '#cf1322',
-};
-
 const CRITICALITY_ORDER: Record<string, number> = {
   critical: 0,
   high: 1,
@@ -44,13 +37,11 @@ const CRITICALITY_ORDER: Record<string, number> = {
   '': 4,
 };
 
+// Colour comes from a CSS class, not an inline style: an inline background is
+// unreachable by the theme, so a dark-mode palette can't touch it.
 function CriticalityBadge({ level }: { level?: Criticality }) {
   if (!level) return null;
-  return (
-    <span className="criticality-badge" style={{ backgroundColor: CRITICALITY_COLORS[level] }}>
-      {level}
-    </span>
-  );
+  return <span className={`criticality-badge criticality-${level}`}>{level}</span>;
 }
 
 function MetadataEditor({
@@ -248,18 +239,10 @@ function FieldExplorer({ groupId, path }: { groupId: string; path: DataPath }) {
   );
 }
 
-const HEALTH_COLORS: Record<Health, string> = {
-  Green: '#52c41a',
-  Yellow: '#faad14',
-  Red: '#cf1322',
-  Unknown: '#bfbfbf',
-};
-
 function HealthDot({ health, title }: { health: Health; title?: string }) {
   return (
     <span
-      className="health-dot"
-      style={{ backgroundColor: HEALTH_COLORS[health] }}
+      className={`health-dot health-${health.toLowerCase()}`}
       title={title || `Health: ${health}`}
     />
   );
@@ -404,7 +387,15 @@ function DataPathCard({
             <span className="owner-label">{metadata.owner}</span>
           )}
           <CriticalityBadge level={metadata.criticality} />
-          {showGroup && <span className="group-badge" title={`Worker group: ${path.groupName}`}>{path.groupName}</span>}
+          {showGroup && (
+            <span
+              className="group-badge"
+              title={path.groupType === 'edge' ? `Edge fleet: ${path.groupName}` : `Worker group: ${path.groupName}`}
+            >
+              {path.groupType === 'edge' && <span className="group-badge-kind">Edge</span>}
+              {path.groupName}
+            </span>
+          )}
           {path.pack && <span className="pack-badge" title={`Defined in pack: ${path.pack}`}>📦 {path.pack}</span>}
           {path.stitch && <span className="stitch-badge" title="Pack routes back through the worker group routing table">↩ via routing table</span>}
           {path.kind === 'quickconnect' && <span className="quickconnect-badge">QuickConnect</span>}
@@ -544,6 +535,92 @@ function groupPaths(
   return entries;
 }
 
+type Theme = 'light' | 'dark';
+
+const THEME_KEY = 'data-dictionary:theme';
+const DEFAULT_THEME: Theme = 'dark';
+
+// Only 'light'/'dark' count; anything else means no choice has been made yet.
+// Reads can throw in a sandboxed iframe, so guard them.
+function readStoredTheme(): Theme | null {
+  try {
+    const stored = window.localStorage.getItem(THEME_KEY);
+    return stored === 'light' || stored === 'dark' ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Current theme, applied to <html data-theme> so the CSS token blocks can pick
+ * it up. Dark by default; switching remembers the choice.
+ *
+ * The OS preference is deliberately NOT consulted. The app runs in an iframe, so
+ * `prefers-color-scheme` reports the OS/browser setting rather than the theme of
+ * the surrounding Cribl UI — and the platform exposes no theme signal — so it's
+ * a poor proxy for what would actually look right embedded in the page.
+ */
+function useTheme(): [Theme, () => void] {
+  const [theme, setTheme] = useState<Theme>(() => readStoredTheme() ?? DEFAULT_THEME);
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
+  const toggle = useCallback(() => {
+    setTheme(prev => {
+      const next: Theme = prev === 'dark' ? 'light' : 'dark';
+      try {
+        window.localStorage.setItem(THEME_KEY, next);
+      } catch {
+        // The theme still applies for this session; it just won't be remembered.
+      }
+      return next;
+    });
+  }, []);
+
+  return [theme, toggle];
+}
+
+// Inline SVG rather than ☀/🌙: those render as full-colour emoji on some
+// platforms and as a bare glyph on others. `currentColor` also means the icon
+// picks up the button's hover colour for free.
+function SunIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+      <circle cx="8" cy="8" r="3.1" fill="currentColor" />
+      <g stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+        <line x1="8" y1="0.9" x2="8" y2="2.5" />
+        <line x1="8" y1="13.5" x2="8" y2="15.1" />
+        <line x1="0.9" y1="8" x2="2.5" y2="8" />
+        <line x1="13.5" y1="8" x2="15.1" y2="8" />
+        <line x1="3.1" y1="3.1" x2="4.3" y2="4.3" />
+        <line x1="11.7" y1="11.7" x2="12.9" y2="12.9" />
+        <line x1="3.1" y1="12.9" x2="4.3" y2="11.7" />
+        <line x1="11.7" y1="4.3" x2="12.9" y2="3.1" />
+      </g>
+    </svg>
+  );
+}
+
+function MoonIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true" focusable="false">
+      <path d="M13.8 10.6A6.2 6.2 0 0 1 5.4 2.2a6.2 6.2 0 1 0 8.4 8.4z" fill="currentColor" />
+    </svg>
+  );
+}
+
+// Shows the theme you'd switch TO, which is what the click does.
+function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {
+  const label = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+  return (
+    <button className="theme-btn" onClick={onToggle} title={label} aria-label={label}>
+      {theme === 'dark' ? <SunIcon /> : <MoonIcon />}
+    </button>
+  );
+}
+
 const INTRO_COLLAPSED_KEY = 'data-dictionary:intro-collapsed';
 
 // The app runs in a sandboxed iframe, where touching localStorage can throw
@@ -642,8 +719,10 @@ function IntroPanel() {
               <h3>Working with it</h3>
               <ul className="intro-list">
                 <li>
-                  <strong>Pick a worker group</strong>, or <strong>All worker groups</strong>{' '}
-                  to audit the whole deployment at once. Groups appear as they load.
+                  <strong>Pick a worker group or Edge fleet</strong>, or{' '}
+                  <strong>All worker groups &amp; fleets</strong> to audit the whole
+                  deployment at once. Groups appear as they load, and fleets are marked{' '}
+                  <span className="edge-badge">Edge</span>.
                 </li>
                 <li>
                   <strong>Click any path</strong> to annotate it with an owner, criticality,
@@ -763,6 +842,7 @@ function App() {
   const [showDisabled, setShowDisabled] = useState(false);
   const [groupByMode, setGroupByMode] = useState<GroupBy>('none');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [theme, toggleTheme] = useTheme();
 
   // Tracks groups already loaded so we dedupe fetches across re-selections.
   const loadedRef = useRef<Set<string>>(new Set());
@@ -973,6 +1053,12 @@ function App() {
     );
   }
 
+  const streamGroups = groups.filter(g => g.type === 'stream');
+  const edgeGroups = groups.filter(g => g.type === 'edge');
+  // The single group in scope, when exactly one is selected — used to badge the
+  // stats bar so you can tell a fleet from a worker group at a glance.
+  const soleGroup = showingAll ? undefined : groups.find(g => g.id === scope);
+
   // Counts across every group on screen.
   const activeSourceCount = visibleDicts.reduce(
     (n, d) => n + d.sources.filter(s => !s.disabled).length, 0,
@@ -990,12 +1076,28 @@ function App() {
             value={scope || ''}
             onChange={e => selectScope(e.target.value)}
           >
-            <option value={ALL_GROUPS}>All worker groups</option>
-            {groups.map(group => (
-              <option key={group.id} value={group.id}>
-                {group.name || group.id}
-              </option>
-            ))}
+            <option value={ALL_GROUPS}>All worker groups &amp; fleets</option>
+            {/* Split into optgroups so Edge fleets are labelled as such at the
+                point of selection. Flat list when there's only one kind, rather
+                than a lone section header. */}
+            {streamGroups.length > 0 && edgeGroups.length > 0 ? (
+              <>
+                <optgroup label="Stream worker groups">
+                  {streamGroups.map(group => (
+                    <option key={group.id} value={group.id}>{group.name || group.id}</option>
+                  ))}
+                </optgroup>
+                <optgroup label="Edge fleets">
+                  {edgeGroups.map(group => (
+                    <option key={group.id} value={group.id}>{group.name || group.id}</option>
+                  ))}
+                </optgroup>
+              </>
+            ) : (
+              groups.map(group => (
+                <option key={group.id} value={group.id}>{group.name || group.id}</option>
+              ))
+            )}
           </select>
           <div className="view-toggle">
             <button
@@ -1056,6 +1158,7 @@ function App() {
             {anyLoading ? 'Loading…' : 'Refresh'}
           </button>
           <ExportMenu disabled={filteredPaths.length === 0} onExport={handleExport} />
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
           {saveStatus === 'saving' && <span className="save-indicator saving">Saving...</span>}
           {saveStatus === 'saved' && <span className="save-indicator saved">Saved</span>}
           {saveStatus === 'error' && <span className="save-indicator error">Save failed</span>}
@@ -1080,8 +1183,14 @@ function App() {
         <div className="stats-bar">
           {showingAll && (
             <span className="stat">
-              {visibleDicts.length} worker group{visibleDicts.length === 1 ? '' : 's'}
+              {visibleDicts.length} group{visibleDicts.length === 1 ? '' : 's'}
               {visibleDicts.length < scopeGroupCount ? ` of ${scopeGroupCount}` : ''}
+              {edgeGroups.length > 0 && ` (${streamGroups.length} Stream · ${edgeGroups.length} Edge)`}
+            </span>
+          )}
+          {soleGroup && (
+            <span className="stat">
+              {soleGroup.type === 'edge' ? 'Edge fleet' : 'Stream worker group'}
             </span>
           )}
           <span className="stat">{activeSourceCount} active sources{showDisabled ? ` (${totalSourceCount} total)` : ''}</span>
@@ -1147,6 +1256,10 @@ function App() {
                 {groupByMode !== 'none' && (
                   <div className="path-group-header">
                     <span className="path-group-title">{group.label}</span>
+                    {/* Sectioned by group, so say which sections are fleets. */}
+                    {groupByMode === 'workerGroup' && group.paths[0]?.groupType === 'edge' && (
+                      <span className="edge-badge" title="Cribl Edge fleet">Edge</span>
+                    )}
                     <span className="path-group-count">{group.paths.length}</span>
                   </div>
                 )}

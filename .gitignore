@@ -20,6 +20,10 @@ package-build
 /static
 /default
 
+# Throwaway harness that renders App.css in both themes side by side, for
+# eyeballing the palette without a Live Preview session. Regenerate, don't commit.
+theme-preview.html
+
 # Internal scaffold / planning artifacts (not published to the public repo)
 openapi.json
 executions
