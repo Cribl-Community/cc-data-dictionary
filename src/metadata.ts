@@ -84,13 +84,23 @@ export function applyMetadataEdit(
   return next;
 }
 
+// The KV store keeps the value as an opaque string. Read it as text and parse it
+// ourselves: a JSON content type lets the server coerce the body, which stores
+// "[object Object]" and makes res.json() throw.
+function parseStored(text: string): MetadataStore {
+  let value: unknown = JSON.parse(text);
+  if (typeof value === 'string') value = JSON.parse(value); // double-encoded
+  return value && typeof value === 'object' ? (value as MetadataStore) : {};
+}
+
 export async function loadMetadata(): Promise<MetadataStore> {
   try {
     const res = await fetch(`${getApiUrl()}${KV_PATH}`);
     if (res.status === 404) return {};
     if (!res.ok) throw new Error(`Failed to load metadata: ${res.status}`);
-    return await res.json();
-  } catch {
+    return parseStored(await res.text());
+  } catch (e) {
+    console.error('Could not load data dictionary metadata', e);
     return {};
   }
 }
@@ -98,7 +108,7 @@ export async function loadMetadata(): Promise<MetadataStore> {
 export async function saveMetadata(store: MetadataStore): Promise<void> {
   const res = await fetch(`${getApiUrl()}${KV_PATH}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'text/plain' },
     body: JSON.stringify(store),
   });
   if (!res.ok) throw new Error(`Failed to save metadata: ${res.status}`);
